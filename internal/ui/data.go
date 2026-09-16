@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,9 +22,14 @@ type (
 		inventory string
 		hosts     []awx.Host
 	}
+	// outputMsg carries a batch of job output. chunk holds the events newer
+	// than the counter that was requested; reset means replace, not append.
 	outputMsg struct {
-		job  awx.Job
-		text string
+		job     awx.Job
+		chunk   string
+		counter int
+		reset   bool
+		more    bool
 	}
 	launchedMsg struct{ job awx.Job }
 	canceledMsg struct{ id int }
@@ -107,7 +113,11 @@ func (m Model) fetchHosts(inventoryID int, name string) tea.Cmd {
 	}
 }
 
-func (m Model) fetchOutput(jobID int) tea.Cmd {
+// fetchOutput reads job output. A finished job is fetched whole from the
+// /stdout/ endpoint in one request; a running job is tailed through
+// job_events, which — unlike /stdout/ — is populated while it runs. Passing
+// after > 0 fetches only the events newer than that counter.
+func (m Model) fetchOutput(jobID, after int) tea.Cmd {
 	c := m.client
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
@@ -116,12 +126,39 @@ func (m Model) fetchOutput(jobID int) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		text, err := c.Stdout(ctx, jobID)
-		if err != nil {
-			// A job that has not started yet has no stdout endpoint content.
-			text = ""
+
+		if after == 0 && !job.IsRunning() {
+			text, err := c.Stdout(ctx, jobID)
+			switch {
+			case err == nil && strings.TrimSpace(text) != "":
+				return outputMsg{job: job, chunk: text, reset: true}
+			case err != nil && !errors.Is(err, awx.ErrStdoutNotReady):
+				// Fall through to job_events, which may still have the output.
+			}
 		}
-		return outputMsg{job: job, text: text}
+
+		events, err := c.JobEvents(ctx, jobID, after)
+		if err != nil {
+			return errMsg{err}
+		}
+		var b strings.Builder
+		last := after
+		for _, e := range events {
+			if e.Counter > last {
+				last = e.Counter
+			}
+			if line := strings.TrimRight(e.Stdout, "\r\n"); line != "" {
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+		}
+		return outputMsg{
+			job:     job,
+			chunk:   b.String(),
+			counter: last,
+			reset:   after == 0,
+			more:    len(events) == awx.EventPageSize,
+		}
 	}
 }
 

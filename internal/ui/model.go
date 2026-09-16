@@ -39,6 +39,8 @@ const (
 const (
 	pollInterval    = 2 * time.Second
 	jobsAutoRefresh = 5 * time.Second
+	// maxOutputPages bounds how many event pages one refresh burst pulls.
+	maxOutputPages = 50
 )
 
 // Model is the whole application state.
@@ -67,10 +69,12 @@ type Model struct {
 	inflight    int
 
 	// job output view
-	vp         viewport.Model
-	outputJob  awx.Job
-	outputText string
-	follow     bool
+	vp            viewport.Model
+	outputJob     awx.Job
+	outputText    string
+	outputCounter int
+	outputPages   int
+	follow        bool
 
 	// inventory drill-down
 	hostTitle  string
@@ -201,10 +205,11 @@ func (m *Model) openOutput(job awx.Job) tea.Cmd {
 	m.mode = modeOutput
 	m.outputJob = job
 	m.outputText = ""
+	m.outputCounter = 0
+	m.outputPages = 0
 	m.follow = true
 	m.vp = viewport.New(m.width, m.outputHeight())
-	m.inflight++
-	return m.fetchOutput(job.ID)
+	return m.fetchOutput(job.ID, 0)
 }
 
 func (m Model) outputHeight() int {
@@ -245,7 +250,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		cmds := []tea.Cmd{tick(pollInterval)}
 		if m.mode == modeOutput && m.outputJob.IsRunning() {
-			cmds = append(cmds, m.fetchOutput(m.outputJob.ID))
+			cmds = append(cmds, m.fetchOutput(m.outputJob.ID, m.outputCounter))
 		}
 		if m.mode == modeList && m.active == tabJobs && time.Since(m.lastJobsPull) >= jobsAutoRefresh {
 			m.lastJobsPull = time.Now()
@@ -297,9 +302,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case outputMsg:
-		m.inflight = max(0, m.inflight-1)
 		m.outputJob = msg.job
-		m.setOutput(msg.text)
+		text := m.outputText + msg.chunk
+		if msg.reset {
+			text = msg.chunk
+			m.outputPages = 0
+		}
+		m.outputCounter = msg.counter
+		m.setOutput(text)
+		// Long jobs span many event pages; keep pulling until caught up.
+		if msg.more && m.mode == modeOutput && m.outputPages < maxOutputPages {
+			m.outputPages++
+			return m, m.fetchOutput(m.outputJob.ID, m.outputCounter)
+		}
 		return m, nil
 
 	case launchedMsg:
@@ -404,8 +419,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "r":
-			m.inflight++
-			return m, m.fetchOutput(m.outputJob.ID)
+			m.err = nil
+			return m, m.fetchOutput(m.outputJob.ID, 0)
 		case "c":
 			if m.outputJob.IsRunning() {
 				return m, m.cancelJob(m.outputJob.ID)

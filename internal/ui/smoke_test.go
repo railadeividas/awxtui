@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -66,8 +67,48 @@ func mockAWX(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/v2/jobs/43/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, map[string]any{"id": 43, "name": "Deploy web app", "status": "running", "elapsed": 14.1})
 	})
+	mux.HandleFunc("/api/v2/jobs/42/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, map[string]any{"id": 42, "name": "Deploy web app", "status": "successful", "elapsed": 96.2})
+	})
+	// Real AWX rejects format=ansi when the client asks for JSON, and serves
+	// nothing useful while a job is still running.
+	mux.HandleFunc("/api/v2/jobs/42/stdout/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			http.Error(w, "Not acceptable", http.StatusNotAcceptable)
+			return
+		}
+		fmt.Fprint(w, "PLAY [web] ****\nok: [web-01]\narchived stdout\n")
+	})
 	mux.HandleFunc("/api/v2/jobs/43/stdout/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "PLAY [web] ****\n\nTASK [Gathering Facts] ****\nok: [web-01]\n")
+		w.WriteHeader(http.StatusAccepted)
+	})
+	// job_events, paginated by counter__gt like the real API.
+	mux.HandleFunc("/api/v2/jobs/43/job_events/", func(w http.ResponseWriter, r *http.Request) {
+		after, _ := strconv.Atoi(r.URL.Query().Get("counter__gt"))
+		all := []struct {
+			counter int
+			stdout  string
+		}{
+			{1, "PLAY [web] ****"},
+			{2, ""},
+			{3, "TASK [Gathering Facts] ****"},
+			{4, "ok: [web-01]"},
+			{5, "TASK [Deploy] ****"},
+			{6, "changed: [web-01]"},
+		}
+		var results []any
+		for _, e := range all {
+			if e.counter > after {
+				results = append(results, map[string]any{
+					"counter": e.counter, "stdout": e.stdout,
+					"start_line": e.counter, "end_line": e.counter,
+				})
+			}
+		}
+		write(w, page(results...))
+	})
+	mux.HandleFunc("/api/v2/jobs/42/job_events/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, page())
 	})
 	mux.HandleFunc("/api/v2/jobs/43/cancel/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -225,6 +266,56 @@ func TestFlows(t *testing.T) {
 	m = step(t, m, key("c"))
 	if !strings.Contains(m.notice, "cancel requested") {
 		t.Fatalf("expected cancel notice, got %q (err %v)", m.notice, m.err)
+	}
+}
+
+// A running job has no /stdout/ content but does have job_events; this is the
+// case that used to show a permanent "waiting for output…".
+func TestRunningJobOutputComesFromEvents(t *testing.T) {
+	srv := mockAWX(t)
+	m := New(awx.New(srv.URL, "test-token", false))
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = step(t, m, m.connect())
+	m = step(t, m, key("2")) // jobs tab, running job 43 is first
+	m = step(t, m, key("enter"))
+
+	if m.err != nil {
+		t.Fatalf("opening output errored: %v", m.err)
+	}
+	if !m.outputJob.IsRunning() {
+		t.Fatalf("expected to open the running job, got %q", m.outputJob.Status)
+	}
+	for _, want := range []string{"PLAY [web]", "Gathering Facts", "changed: [web-01]"} {
+		if !strings.Contains(m.outputText, want) {
+			t.Errorf("output missing %q; got:\n%s", want, m.outputText)
+		}
+	}
+	if m.outputCounter != 6 {
+		t.Errorf("expected to tail up to counter 6, got %d", m.outputCounter)
+	}
+	// A poll tick must not duplicate the lines already shown.
+	before := m.outputText
+	m = step(t, m, tickMsg(time.Now()))
+	if m.outputText != before {
+		t.Errorf("poll duplicated output:\nbefore:\n%s\nafter:\n%s", before, m.outputText)
+	}
+}
+
+// Finished jobs whose events were pruned still fall back to /stdout/.
+func TestFinishedJobFallsBackToStdout(t *testing.T) {
+	srv := mockAWX(t)
+	m := New(awx.New(srv.URL, "test-token", false))
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = step(t, m, m.connect())
+	m = step(t, m, key("2"))
+	m = step(t, m, key("down"))
+	m = step(t, m, key("enter"))
+
+	if m.outputJob.ID != 42 {
+		t.Fatalf("expected job 42, got %d", m.outputJob.ID)
+	}
+	if !strings.Contains(m.outputText, "archived stdout") {
+		t.Fatalf("expected stdout fallback, got %q (err %v)", m.outputText, m.err)
 	}
 }
 

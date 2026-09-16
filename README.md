@@ -59,6 +59,10 @@ Launching prompts for optional `extra_vars` as a JSON object; leave it empty to
 launch with the template's defaults. Job output follows live while the job runs,
 and the Jobs list refreshes itself every few seconds.
 
+Output for a running job is tailed from `job_events` (the same stream the web UI
+renders, available while the job runs); a finished job is fetched in one request
+from `/stdout/`, falling back to events if AWX has no stored stdout.
+
 ## Layout
 
 | Path | What |
@@ -79,6 +83,12 @@ Set `AWXTUI_SHOW=1` to print the rendered views while testing:
 
 ```sh
 AWXTUI_SHOW=1 go test -v ./internal/ui -run TestFlows
+```
+
+There is also a live test against a real instance, skipped by default:
+
+```sh
+AWXTUI_LIVE=1 go test -v ./internal/ui -run TestLive
 ```
 
 ## Not in the POC

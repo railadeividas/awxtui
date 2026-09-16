@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,19 +39,27 @@ func New(baseURL, token string, insecure bool) *Client {
 
 func (c *Client) BaseURL() string { return c.baseURL }
 
-func (c *Client) do(ctx context.Context, method, path string, body io.Reader, out any) error {
+func (c *Client) request(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 	u := path
 	if !strings.HasPrefix(path, "http") {
 		u = c.baseURL + path
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	return req, nil
+}
+
+func (c *Client) do(ctx context.Context, method, path string, body io.Reader, out any) error {
+	req, err := c.request(ctx, method, path, body)
+	if err != nil {
+		return err
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -237,10 +246,53 @@ func (c *Client) Cancel(ctx context.Context, jobID int) error {
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v2/jobs/%d/cancel/", jobID), strings.NewReader("{}"), nil)
 }
 
-// Stdout returns the job output as ANSI-coloured text.
+// ErrStdoutNotReady is returned when AWX accepts the stdout request but has
+// not finished collating the job's output yet (HTTP 202). This is normal for
+// jobs that are still running; read JobEvents instead.
+var ErrStdoutNotReady = errors.New("job stdout is not ready yet")
+
+// Stdout returns the whole job output as ANSI-coloured text. AWX only serves
+// this reliably once a job has finished and its events are processed.
 func (c *Client) Stdout(ctx context.Context, jobID int) (string, error) {
-	var out string
 	q := url.Values{"format": {"ansi"}}
-	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v2/jobs/%d/stdout/?%s", jobID, q.Encode()), nil, &out)
-	return out, err
+	path := fmt.Sprintf("/api/v2/jobs/%d/stdout/?%s", jobID, q.Encode())
+	req, err := c.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "text/plain")
+	res, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusAccepted {
+		return "", ErrStdoutNotReady
+	}
+	if res.StatusCode >= 400 {
+		msg, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
+		return "", fmt.Errorf("GET %s: %s: %s", path, res.Status, strings.TrimSpace(string(msg)))
+	}
+	raw, err := io.ReadAll(res.Body)
+	return string(raw), err
+}
+
+// EventPageSize is how many job events are fetched per request.
+const EventPageSize = 200
+
+// JobEvent is one entry of a job's output stream. This is the same data the
+// AWX web UI renders, and unlike /stdout/ it is available while a job runs.
+type JobEvent struct {
+	Counter   int    `json:"counter"`
+	Stdout    string `json:"stdout"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+}
+
+// JobEvents returns up to EventPageSize events with a counter above after,
+// oldest first, along with the highest counter seen.
+func (c *Client) JobEvents(ctx context.Context, jobID, after int) ([]JobEvent, error) {
+	path := fmt.Sprintf("/api/v2/jobs/%d/job_events/?order_by=counter&page_size=%d&counter__gt=%d",
+		jobID, EventPageSize, after)
+	return list[JobEvent](ctx, c, path)
 }
