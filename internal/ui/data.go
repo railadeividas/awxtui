@@ -13,7 +13,10 @@ import (
 )
 
 type (
-	connectedMsg struct{ user string }
+	connectedMsg struct {
+		user string
+		gen  int
+	}
 
 	// pageMeta describes the page a list message carries. cont marks a
 	// continuation of a list already on screen; query is the server-side
@@ -24,6 +27,7 @@ type (
 		cont  bool
 		query string
 		seq   int
+		gen   int
 	}
 	templatesMsg struct {
 		pageMeta
@@ -59,18 +63,29 @@ type (
 		counter int
 		reset   bool
 		more    bool
+		gen     int
 	}
-	launchedMsg struct{ job awx.Job }
+	launchedMsg struct {
+		job awx.Job
+		gen int
+	}
 	// launchFormMsg carries everything needed to build the launch form.
 	launchFormMsg struct {
+		gen         int
 		template    awx.JobTemplate
 		config      awx.LaunchConfig
 		survey      awx.SurveySpec
 		inventories []awx.Inventory
 	}
-	canceledMsg struct{ id int }
-	errMsg      struct{ err error }
-	tickMsg     time.Time
+	canceledMsg struct {
+		id  int
+		gen int
+	}
+	errMsg struct {
+		err error
+		gen int
+	}
+	tickMsg time.Time
 )
 
 func (e errMsg) Error() string { return e.err.Error() }
@@ -84,17 +99,17 @@ func (m Model) connect() tea.Msg {
 	defer cancel()
 	user, err := m.client.Me(ctx)
 	if err != nil {
-		return errMsg{err}
+		return errMsg{err: err, gen: m.gen}
 	}
-	return connectedMsg{user}
+	return connectedMsg{user: user, gen: m.gen}
 }
 
 // fetch requests one page of a list. An empty pageURL starts at the first
 // page, applying search server-side; cont marks the result as a continuation
 // to append. A page URL already carries the search it belongs to.
 func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
-	c := m.client
-	meta := pageMeta{cont: cont, query: strings.TrimSpace(search), seq: m.searchSeq[t]}
+	c, gen := m.client, m.gen
+	meta := pageMeta{cont: cont, query: strings.TrimSpace(search), seq: m.searchSeq[t], gen: m.gen}
 	switch t {
 	case tabTemplates:
 		return func() tea.Msg {
@@ -102,7 +117,7 @@ func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			defer cancel()
 			p, err := c.JobTemplates(ctx, pageURL, search)
 			if err != nil {
-				return errMsg{err}
+				return errMsg{err: err, gen: gen}
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return templatesMsg{pageMeta: meta, items: p.Results}
@@ -113,7 +128,7 @@ func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			defer cancel()
 			p, err := c.Jobs(ctx, pageURL, search)
 			if err != nil {
-				return errMsg{err}
+				return errMsg{err: err, gen: gen}
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return jobsMsg{pageMeta: meta, items: p.Results}
@@ -124,7 +139,7 @@ func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			defer cancel()
 			p, err := c.Inventories(ctx, pageURL, search)
 			if err != nil {
-				return errMsg{err}
+				return errMsg{err: err, gen: gen}
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return inventoriesMsg{pageMeta: meta, items: p.Results}
@@ -135,7 +150,7 @@ func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			defer cancel()
 			p, err := c.Projects(ctx, pageURL, search)
 			if err != nil {
-				return errMsg{err}
+				return errMsg{err: err, gen: gen}
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return projectsMsg{pageMeta: meta, items: p.Results}
@@ -152,16 +167,16 @@ func searchDebounce(t tab, seq int) tea.Cmd {
 }
 
 func (m Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.Cmd {
-	c := m.client
+	c, gen := m.client, m.gen
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		p, err := c.Hosts(ctx, inventoryID, pageURL, "")
 		if err != nil {
-			return errMsg{err}
+			return errMsg{err: err, gen: gen}
 		}
 		return hostsMsg{
-			pageMeta:  pageMeta{next: p.Next, count: p.Count, cont: cont},
+			pageMeta:  pageMeta{next: p.Next, count: p.Count, cont: cont, gen: gen},
 			inventory: name, inventoryID: inventoryID, hosts: p.Results,
 		}
 	}
@@ -172,20 +187,20 @@ func (m Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.
 // job_events, which — unlike /stdout/ — is populated while it runs. Passing
 // after > 0 fetches only the events newer than that counter.
 func (m Model) fetchOutput(jobID, after int) tea.Cmd {
-	c := m.client
+	c, gen := m.client, m.gen
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		job, err := c.Job(ctx, jobID)
 		if err != nil {
-			return errMsg{err}
+			return errMsg{err: err, gen: gen}
 		}
 
 		if after == 0 && !job.IsRunning() {
 			text, err := c.Stdout(ctx, jobID)
 			switch {
 			case err == nil && strings.TrimSpace(text) != "":
-				return outputMsg{job: job, chunk: text, reset: true}
+				return outputMsg{job: job, chunk: text, reset: true, gen: gen}
 			case err != nil && !errors.Is(err, awx.ErrStdoutNotReady):
 				// Fall through to job_events, which may still have the output.
 			}
@@ -193,7 +208,7 @@ func (m Model) fetchOutput(jobID, after int) tea.Cmd {
 
 		events, err := c.JobEvents(ctx, jobID, after)
 		if err != nil {
-			return errMsg{err}
+			return errMsg{err: err, gen: gen}
 		}
 		var b strings.Builder
 		last := after
@@ -212,20 +227,21 @@ func (m Model) fetchOutput(jobID, after int) tea.Cmd {
 			counter: last,
 			reset:   after == 0,
 			more:    len(events) == awx.EventPageSize,
+			gen:     gen,
 		}
 	}
 }
 
 func (m Model) launch(templateID int, payload map[string]any) tea.Cmd {
-	c := m.client
+	c, gen := m.client, m.gen
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		job, err := c.Launch(ctx, templateID, payload)
 		if err != nil {
-			return errMsg{err}
+			return errMsg{err: err, gen: gen}
 		}
-		return launchedMsg{job}
+		return launchedMsg{job: job, gen: gen}
 	}
 }
 
@@ -233,19 +249,19 @@ func (m Model) launch(templateID int, payload map[string]any) tea.Cmd {
 // ask_*_on_launch prompts, its survey, and an inventory list when the template
 // lets the user choose one.
 func (m Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
-	c := m.client
+	c, gen := m.client, m.gen
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		cfg, err := c.LaunchConfig(ctx, t.ID)
 		if err != nil {
-			return errMsg{err}
+			return errMsg{err: err, gen: gen}
 		}
-		msg := launchFormMsg{template: t, config: cfg}
+		msg := launchFormMsg{gen: gen, template: t, config: cfg}
 		if cfg.SurveyEnabled {
 			spec, err := c.SurveySpec(ctx, t.ID)
 			if err != nil {
-				return errMsg{err}
+				return errMsg{err: err, gen: gen}
 			}
 			msg.survey = spec
 		}
@@ -258,14 +274,14 @@ func (m Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 }
 
 func (m Model) cancelJob(jobID int) tea.Cmd {
-	c := m.client
+	c, gen := m.client, m.gen
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		if err := c.Cancel(ctx, jobID); err != nil {
-			return errMsg{err}
+			return errMsg{err: err, gen: gen}
 		}
-		return canceledMsg{jobID}
+		return canceledMsg{id: jobID, gen: gen}
 	}
 }
 

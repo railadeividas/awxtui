@@ -63,23 +63,67 @@ func run() error {
 			"awxtui: warning: %s holds a token but is readable by others; chmod 600 it\n", file.Path)
 	}
 
-	token, err := inst.ResolveToken()
+	// build turns a resolved instance into a client, running its
+	// token_command if it has one.
+	build := func(i config.Instance) (*awx.Client, error) {
+		token, err := i.ResolveToken()
+		if err != nil {
+			return nil, err
+		}
+		c := awx.New(i.URL, token, i.Insecure)
+		if i.ReadOnly || *readOnly {
+			c = c.ReadOnly()
+		}
+		return c, nil
+	}
+
+	client, err := build(inst)
 	if err != nil {
 		return err
 	}
 
-	client := awx.New(inst.URL, token, inst.Insecure)
-	if inst.ReadOnly || *readOnly {
-		client = client.ReadOnly()
+	// connector lets the UI switch instances without restarting. The active
+	// instance may have come from the environment rather than the file, so it
+	// is handled separately.
+	connector := func(name string) (*awx.Client, error) {
+		if name == inst.Name {
+			return build(inst)
+		}
+		other, err := config.Resolve(file, name, os.Getenv)
+		if err != nil {
+			return nil, err
+		}
+		return build(other)
 	}
 
 	p := tea.NewProgram(
-		ui.New(client, ui.WithInstance(inst.Name)),
+		ui.New(client,
+			ui.WithInstances(instanceList(file, inst), inst.Name),
+			ui.WithConnector(connector),
+		),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
 	_, err = p.Run()
 	return err
+}
+
+// instanceList is everything the switcher can offer: the configured
+// instances, plus the active one when it came from the environment.
+func instanceList(f config.File, active config.Instance) []ui.InstanceInfo {
+	var list []ui.InstanceInfo
+	seen := false
+	for _, name := range f.Names() {
+		i := f.Instances[name]
+		list = append(list, ui.InstanceInfo{Name: name, URL: i.URL, ReadOnly: i.ReadOnly})
+		seen = seen || name == active.Name
+	}
+	if !seen {
+		list = append([]ui.InstanceInfo{{
+			Name: active.Name, URL: active.URL, ReadOnly: active.ReadOnly,
+		}}, list...)
+	}
+	return list
 }
 
 func listInstances(f config.File) error {

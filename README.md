@@ -47,6 +47,12 @@ awxtui -list                # what is configured
 awxtui -read-only           # refuse writes whatever the config says
 ```
 
+Press `i` in the app to switch instance without restarting: pick from the list,
+and everything — templates, jobs, filters, the connected user, the read-only
+badge — is reloaded from the new one. Replies still in flight from the previous
+instance are discarded rather than mixed in. The header names the instance you
+are on, with a `▾` when there are others to switch to.
+
 An instance is chosen in this order: `-instance`, `$AWXTUI_INSTANCE`,
 `$AWX_URL`+`$AWX_TOKEN`, the file's `default`, or the only one configured. An
 instance with no token falls back to `$AWX_TOKEN`, so the file can hold URLs
@@ -87,6 +93,7 @@ NAME                     PROJECT      INVENTORY     LAST RUN       WHEN
 | `1`–`4`, `tab` | switch between Templates, Jobs, Inventories, Projects |
 | `↑` `↓` / `j` `k` | move; `ctrl+d` / `ctrl+u` half page, `g` / `G` top / bottom |
 | `/` | search the current view (`esc` clears) |
+| `i` | switch to another configured instance |
 | `enter` | launch a template · open job output · list inventory hosts |
 | `↑↓` / `tab` | move between fields in the launch form; `←→` pick a choice, `space` toggles a multiselect, `ctrl+s` submits |
 | `c` | cancel a running job |
@@ -150,6 +157,7 @@ from `/stdout/`, falling back to events if AWX has no stored stdout.
 | --- | --- |
 | `main.go` | flags and program start-up |
 | `internal/config` | config file, instance selection, token resolution |
+| `internal/ui/instances.go` | in-app instance switcher |
 | `internal/awx` | minimal AWX v2 API client |
 | `internal/awx/launch.go` | launch metadata, survey specs, YAML/JSON extra vars |
 | `internal/ui` | Bubble Tea model, key handling, rendering |
@@ -212,6 +220,5 @@ the first page and merging it, so the pages you scrolled through stay put.
 
 ## Not done yet
 
-- Switching instance from inside the TUI (restart with `-instance` for now).
 - Workflow job templates, schedules and ad-hoc commands.
 - Prompting for instance groups, labels, execution environments, credentials.

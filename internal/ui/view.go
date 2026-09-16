@@ -48,6 +48,8 @@ func (m Model) View() string {
 		b.WriteString(m.pane(m.helpModal()))
 	case modeError:
 		b.WriteString(m.pane(m.errorModal()))
+	case modeInstances:
+		b.WriteString(m.pane(m.instancesModal()))
 	case modeHosts:
 		b.WriteString(m.hostsBody())
 	default:
@@ -71,7 +73,11 @@ func (m Model) rule() string {
 func (m Model) headerView() string {
 	left := titleStyle.Render("awxtui")
 	if m.instance != "" {
-		left += "  " + tabActiveStyle.Render(m.instance)
+		chip := m.instance
+		if len(m.instances) > 1 {
+			chip += " ▾"
+		}
+		left += "  " + tabActiveStyle.Render(chip)
 	}
 	host := m.client.BaseURL()
 	host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
@@ -477,7 +483,11 @@ func (m Model) statusView() string {
 		case tabProjects:
 			action = "details"
 		}
-		keys = [][2]string{{"↑↓", "move"}, {"enter", action}, {"/", "search"}, {"r", "refresh"}, {"?", "help"}, {"q", "quit"}}
+		keys = [][2]string{{"↑↓", "move"}, {"enter", action}, {"/", "search"}, {"r", "refresh"}}
+		if len(m.instances) > 1 {
+			keys = append(keys, [2]string{"i", "instance"})
+		}
+		keys = append(keys, [2]string{"?", "help"}, [2]string{"q", "quit"})
 	}
 	return m.statusOrKeys(keyHelp(keys), "")
 }

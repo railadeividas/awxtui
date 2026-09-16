@@ -36,6 +36,7 @@ const (
 	modeHosts
 	modeHelp
 	modeError
+	modeInstances
 )
 
 const (
@@ -65,6 +66,14 @@ type Model struct {
 	client   *awx.Client
 	user     string
 	instance string
+
+	// instance switching
+	instances      []InstanceInfo
+	instanceCursor int
+	connector      Connector
+	// gen increments on every switch; replies tagged with an older
+	// generation belong to the previous instance and are discarded.
+	gen int
 
 	width, height int
 	ready         bool
@@ -133,16 +142,6 @@ type Model struct {
 
 // Option configures the model at construction.
 type Option func(*Model)
-
-// WithInstance labels the session with the configured instance name, so it is
-// obvious which AWX is on screen.
-func WithInstance(name string) Option {
-	return func(m *Model) {
-		if name != "env" {
-			m.instance = name
-		}
-	}
-}
 
 // New builds the initial model.
 func New(c *awx.Client, opts ...Option) Model {
@@ -383,13 +382,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.runSearch(msg.tab)
 
 	case connectedMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
 		m.user = msg.user
 		return m, m.load(tabTemplates, true)
 
 	case templatesMsg:
 		m.inflight = max(0, m.inflight-1)
-		if msg.seq != m.searchSeq[tabTemplates] {
-			return m, nil // a newer search has been issued
+		if msg.gen != m.gen || msg.seq != m.searchSeq[tabTemplates] {
+			return m, nil // a newer search, or another instance, has replaced it
 		}
 		m.fetching[tabTemplates], m.searching[tabTemplates] = false, false
 		if msg.cont {
@@ -407,8 +409,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case jobsMsg:
 		m.inflight = max(0, m.inflight-1)
-		if msg.seq != m.searchSeq[tabJobs] {
-			return m, nil // a newer search has been issued
+		if msg.gen != m.gen || msg.seq != m.searchSeq[tabJobs] {
+			return m, nil // a newer search, or another instance, has replaced it
 		}
 		m.fetching[tabJobs], m.searching[tabJobs] = false, false
 		// A background refresh re-reads page one; merge it so the pages the
@@ -438,8 +440,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case inventoriesMsg:
 		m.inflight = max(0, m.inflight-1)
-		if msg.seq != m.searchSeq[tabInventories] {
-			return m, nil // a newer search has been issued
+		if msg.gen != m.gen || msg.seq != m.searchSeq[tabInventories] {
+			return m, nil // a newer search, or another instance, has replaced it
 		}
 		m.fetching[tabInventories], m.searching[tabInventories] = false, false
 		if msg.cont {
@@ -457,8 +459,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case projectsMsg:
 		m.inflight = max(0, m.inflight-1)
-		if msg.seq != m.searchSeq[tabProjects] {
-			return m, nil // a newer search has been issued
+		if msg.gen != m.gen || msg.seq != m.searchSeq[tabProjects] {
+			return m, nil // a newer search, or another instance, has replaced it
 		}
 		m.fetching[tabProjects], m.searching[tabProjects] = false, false
 		if msg.cont {
@@ -476,6 +478,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case hostsMsg:
 		m.inflight = max(0, m.inflight-1)
+		if msg.gen != m.gen {
+			return m, nil
+		}
 		m.mode = modeHosts
 		m.hostTitle = msg.inventory
 		m.hostInventory = msg.inventoryID
@@ -491,6 +496,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case outputMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
 		m.outputJob = msg.job
 		text := m.outputText + msg.chunk
 		if msg.reset {
@@ -508,6 +516,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case launchFormMsg:
 		m.inflight = max(0, m.inflight-1)
+		if msg.gen != m.gen {
+			return m, nil
+		}
 		m.notice = ""
 		m.form = newForm(msg.template, msg.config, msg.survey, msg.inventories, m.width)
 		m.mode = modeLaunch
@@ -515,17 +526,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case launchedMsg:
 		m.inflight = max(0, m.inflight-1)
+		if msg.gen != m.gen {
+			return m, nil
+		}
 		m.notice = fmt.Sprintf("launched job #%d", msg.job.ID)
 		m.loaded[tabJobs] = false
 		cmd := m.openOutput(msg.job)
 		return m, tea.Batch(cmd, m.fetch(tabJobs, "", m.serverQuery[tabJobs], false))
 
 	case canceledMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
 		m.notice = fmt.Sprintf("cancel requested for job #%d", msg.id)
 		return m, m.fetch(tabJobs, "", m.serverQuery[tabJobs], false)
 
 	case errMsg:
 		m.inflight = max(0, m.inflight-1)
+		if msg.gen != m.gen {
+			return m, nil
+		}
 		m.err = msg.err
 		return m, nil
 
@@ -620,6 +640,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		return m, nil
 
+	case modeInstances:
+		return m.handleInstancesKey(msg)
+
 	case modeOutput:
 		return m.handleOutputKey(msg)
 
@@ -652,6 +675,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.err != nil {
 			m.mode = modeError
 		}
+		return m, nil
+	case "i":
+		m.openInstances()
 		return m, nil
 	case "up", "k":
 		return m, m.moveCursor(-1)

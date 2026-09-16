@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/railadeividas/awxtui/internal/awx"
@@ -261,8 +262,8 @@ func settle(t *testing.T, m Model, msg tea.Msg, depth int) Model {
 	}
 	for _, out := range drain(cmd) {
 		switch out.(type) {
-		case tickMsg, tea.QuitMsg, nil:
-			continue
+		case tickMsg, spinner.TickMsg, tea.QuitMsg, nil:
+			continue // timers, not state the tests care about
 		}
 		m = settle(t, m, out, depth+1)
 	}
