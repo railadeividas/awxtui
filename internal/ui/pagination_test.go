@@ -464,6 +464,19 @@ func TestLoadingMoreShowsSpinnerInTheList(t *testing.T) {
 	if got, want := countLines(inflight), countLines(settled); got != want {
 		t.Errorf("view is %d lines while loading, %d when settled", got, want)
 	}
+	// A blank line on either side keeps it from reading as another row.
+	lines := strings.Split(stripANSI(inflight), "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "loading more") {
+			continue
+		}
+		if i == 0 || strings.TrimSpace(lines[i-1]) != "" {
+			t.Errorf("no blank line above the loading line:\n%s", inflight)
+		}
+		if i+1 >= len(lines) || strings.TrimSpace(lines[i+1]) != "" {
+			t.Errorf("no blank line below the loading line:\n%s", inflight)
+		}
+	}
 	if !strings.Contains(inflight, cursorRow) {
 		t.Errorf("cursor row %s scrolled out to make room for the spinner:\n%s",
 			cursorRow, inflight)

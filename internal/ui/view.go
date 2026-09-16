@@ -202,17 +202,20 @@ func (m Model) listBody() string {
 	// notice, which read as a list that had simply stopped.
 	more := m.fetching[m.active] && len(rows) > 0
 	if more {
-		// The spinner takes the last line; re-clamp so the cursor row does
-		// not scroll out from under it.
-		h--
+		// The spinner and the blank line on either side of it take three
+		// lines from the table; re-clamp so the cursor row does not scroll
+		// out from under them.
+		h = max(1, h-3)
 		offset = clampOffset(m.cursor[m.active], offset, h, len(rows))
 	}
 	table := renderTable(tabColumns[m.active], rows, m.cursor[m.active], offset, m.width-1, h)
 	b.WriteString(table)
 	lines := countLines(table)
 	if more {
-		b.WriteString("\n  " + m.spin.View() + dimStyle.Render(" loading more "+strings.ToLower(tabNames[m.active])+"…"))
-		lines++
+		b.WriteString("\n\n  " + m.spin.View() + dimStyle.Render(" loading more "+strings.ToLower(tabNames[m.active])+"…"))
+		// The blank line below it comes out of the padding, which always has
+		// at least one line to give: the table is three rows shorter.
+		lines += 2
 	}
 	// pad to a stable height so the footer does not jump around
 	b.WriteString(strings.Repeat("\n", max(0, m.tableHeight()-lines+1)))
