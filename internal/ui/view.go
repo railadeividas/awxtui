@@ -422,6 +422,9 @@ func (m Model) helpModal() string {
 		{"enter", "launch · open job output · list inventory hosts"},
 		{"c", "cancel a running job"},
 		{"f", "follow job output"},
+		{"n / N", "next · previous search hit in output"},
+		{"] / [", "next · previous failure in output"},
+		{"t / T", "next · previous task in output"},
 		{"r", "refresh"},
 		{"q", "back / quit"},
 	}
@@ -431,47 +434,6 @@ func (m Model) helpModal() string {
 	b.WriteString("\n")
 	b.WriteString(dimStyle.Render("press any key to close"))
 	return modalStyle.Width(min(m.width-6, 76)).Render(b.String())
-}
-
-func (m Model) outputView() string {
-	j := m.outputJob
-	head := titleStyle.Render(fmt.Sprintf("#%d", j.ID)) + "  " + rowStyle.Render(j.Name)
-	right := statusBadge(j.Status) + metaStyle.Render("  "+duration(j.Elapsed))
-	if j.IsRunning() {
-		if m.follow {
-			right += okStyle.Render("  ⟳ follow")
-		} else {
-			right += dimStyle.Render("  ⏸ paused")
-		}
-	}
-	var b strings.Builder
-	b.WriteString(m.spread(head, right))
-	b.WriteString("\n")
-	b.WriteString(m.rule())
-	b.WriteString("\n")
-	if strings.TrimSpace(m.outputText) == "" {
-		placeholder := "  waiting for output…"
-		if !j.IsRunning() && m.outputRetries >= maxOutputRetries {
-			placeholder = "  no output recorded for this job"
-		}
-		body := dimStyle.Render(placeholder)
-		b.WriteString(body)
-		b.WriteString(strings.Repeat("\n", max(0, m.outputHeight()-1)))
-	} else {
-		b.WriteString(m.vp.View())
-	}
-	b.WriteString("\n")
-	b.WriteString(m.rule())
-	b.WriteString("\n")
-	keys := [][2]string{{"↑↓", "scroll"}, {"f", "follow"}, {"g/G", "top/bottom"}, {"r", "reload"}}
-	if j.IsRunning() {
-		keys = append(keys, [2]string{"c", "cancel job"})
-	}
-	keys = append(keys, [2]string{"esc", "back"})
-	left := keyHelp(keys)
-	right = dimStyle.Render(fmt.Sprintf("%3.0f%%", m.vp.ScrollPercent()*100))
-	b.WriteString(m.statusOrKeys(left, right))
-	return b.String()
 }
 
 func (m Model) statusView() string {

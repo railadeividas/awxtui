@@ -121,8 +121,25 @@ func TestLive(t *testing.T) {
 			}
 			t.Fatalf("finished job #%d produced no output", m.outputJob.ID)
 		}
-		t.Logf("finished job #%d %s: %d bytes in %s",
-			m.outputJob.ID, m.outputJob.Status, len(m.outputText), time.Since(start).Round(time.Millisecond))
+		t.Logf("finished job #%d %s: %d bytes, %d wrapped lines, in %s",
+			m.outputJob.ID, m.outputJob.Status, len(m.outputText), len(m.outputLines),
+			time.Since(start).Round(time.Millisecond))
+
+		// Find-in-output over real, ANSI-coloured Ansible output.
+		m = step(t, m, key("/"))
+		m = typeText(t, m, "TASK")
+		t.Logf("search 'TASK': %s", m.matchLabel())
+		if len(m.osearch.matches) == 0 {
+			t.Errorf("no TASK lines found in %d lines of real output", len(m.outputLines))
+		}
+		m = step(t, m, key("enter"))
+		m = step(t, m, key("n"))
+		m = step(t, m, key("g"))
+		if m.jumpLine(1, isTask) {
+			t.Logf("jumped to task line %d of %d", m.outputCursor, len(m.outputLines))
+		} else {
+			t.Errorf("task jump found nothing in real output")
+		}
 		break
 	}
 }

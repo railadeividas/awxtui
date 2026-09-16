@@ -99,6 +99,9 @@ type Model struct {
 	vp            viewport.Model
 	outputJob     awx.Job
 	outputText    string
+	outputLines   []string
+	outputCursor  int
+	osearch       outputSearch
 	outputCounter int
 	outputPages   int
 	outputRetries int
@@ -140,6 +143,7 @@ func New(c *awx.Client) Model {
 		filterInput: fi,
 		spin:        sp,
 		follow:      true,
+		osearch:     newOutputSearch(),
 	}
 }
 
@@ -300,6 +304,11 @@ func (m *Model) openOutput(job awx.Job) tea.Cmd {
 	m.outputPages = 0
 	m.outputRetries = 0
 	m.follow = true
+	m.outputCursor = 0
+	m.osearch.query = ""
+	m.osearch.editing = false
+	m.osearch.matches = nil
+	m.osearch.input.SetValue("")
 	m.vp = viewport.New(m.width, m.outputHeight())
 	return m.fetchOutput(job.ID, 0)
 }
@@ -310,16 +319,6 @@ func (m Model) outputHeight() int {
 		h = 3
 	}
 	return h
-}
-
-func (m *Model) setOutput(text string) {
-	m.outputText = text
-	m.vp.Width = m.width
-	m.vp.Height = m.outputHeight()
-	m.vp.SetContent(wrapANSI(text, m.width))
-	if m.follow {
-		m.vp.GotoBottom()
-	}
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -599,47 +598,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case modeOutput:
-		switch key {
-		case "q", "esc":
-			m.mode = modeList
-			return m, tea.Batch(m.fetch(tabJobs, "", m.serverQuery[tabJobs], false))
-		case "ctrl+c":
-			return m, tea.Quit
-		case "f":
-			m.follow = !m.follow
-			if m.follow {
-				m.vp.GotoBottom()
-			}
-			return m, nil
-		case "r":
-			m.err = nil
-			return m, m.fetchOutput(m.outputJob.ID, 0)
-		case "c":
-			if m.outputJob.IsRunning() {
-				if m.client.IsReadOnly() {
-					m.err = fmt.Errorf("read-only mode: cancelling is disabled")
-					return m, nil
-				}
-				return m, m.cancelJob(m.outputJob.ID)
-			}
-			return m, nil
-		case "g":
-			m.follow = false
-			m.vp.GotoTop()
-			return m, nil
-		case "G":
-			m.follow = true
-			m.vp.GotoBottom()
-			return m, nil
-		}
-		// Manual scrolling drops follow mode.
-		switch key {
-		case "up", "k", "pgup", "ctrl+u", "ctrl+b":
-			m.follow = false
-		}
-		var cmd tea.Cmd
-		m.vp, cmd = m.vp.Update(msg)
-		return m, cmd
+		return m.handleOutputKey(msg)
 
 	case modeHosts:
 		switch key {

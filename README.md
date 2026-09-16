@@ -87,6 +87,26 @@ promptable yet — the template's defaults apply.
 Job output follows live while the job runs, and the Jobs list refreshes itself
 every few seconds.
 
+## Reading job output
+
+`enter` on a job opens its output, which is where most of the time goes on a
+failed run:
+
+| Key | Action |
+| --- | --- |
+| `/` | find in output — matches are highlighted as you type |
+| `n` / `N` | next / previous hit, wrapping around; the position shows as `3/17` |
+| `]` / `[` | next / previous **failure** (`fatal:`, `failed:`, `unreachable:`, `ERROR!`) |
+| `t` / `T` | next / previous task boundary (`TASK`, `PLAY`, `RUNNING HANDLER`, `PLAY RECAP`) |
+| `f` | follow the tail of a running job |
+| `g` / `G` | top / bottom |
+| `esc` | clear the search, or leave the view |
+
+Searching and jumping work on the text as displayed, so Ansible's colour codes
+never interfere: highlighting a match keeps the line's own colour. Jumping
+anywhere turns follow mode off, so a running job cannot yank the view back to
+the bottom while you are reading.
+
 Output for a running job is tailed from `job_events` (the same stream the web UI
 renders, available while the job runs); a finished job is fetched in one request
 from `/stdout/`, falling back to events if AWX has no stored stdout.
@@ -100,6 +120,7 @@ from `/stdout/`, falling back to events if AWX has no stored stdout.
 | `internal/awx/launch.go` | launch metadata, survey specs, YAML/JSON extra vars |
 | `internal/ui` | Bubble Tea model, key handling, rendering |
 | `internal/ui/form.go` | launch form: fields, validation, payload building |
+| `internal/ui/output.go` | job output view: find, highlight, failure/task jumps |
 | `internal/ui/table.go` | responsive column layout (columns shrink, then drop) |
 | `internal/ui/theme.go` | colours and status badges |
 
@@ -144,7 +165,6 @@ the first page and merging it, so the pages you scrolled through stay put.
 
 ## Not done yet
 
-- Search within job output, and jumping between failed tasks.
 - A config file with several named instances, instead of env vars.
 - Workflow job templates, schedules and ad-hoc commands.
 - Prompting for instance groups, labels, execution environments, credentials.

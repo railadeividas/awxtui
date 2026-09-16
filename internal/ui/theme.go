@@ -39,6 +39,10 @@ var (
 
 	inputStyle = lipgloss.NewStyle().Foreground(fg)
 
+	// search hits inside job output
+	matchStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#1F2430")).Background(lipgloss.Color("#FBBF24"))
+	matchCurrentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#1F2430")).Background(lipgloss.Color("#4ADE80")).Bold(true)
+
 	modalStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(accent).
