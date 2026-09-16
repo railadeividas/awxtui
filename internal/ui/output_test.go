@@ -305,3 +305,43 @@ func TestOutputSearchViewRenders(t *testing.T) {
 	m = step(t, m, key("enter"))
 	show(t, "output search (accepted)", m.View())
 }
+
+// The output view used to leave two unused lines under the footer.
+func TestOutputViewFillsTheTerminal(t *testing.T) {
+	srv := outputMock(t)
+	for _, size := range [][2]int{{100, 24}, {120, 40}, {80, 30}} {
+		m := openOutputView(t, srv)
+		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		if got := len(viewLines(m)); got != size[1] {
+			t.Errorf("%dx%d: output view is %d lines, terminal has %d",
+				size[0], size[1], got, size[1])
+		}
+		for i, l := range viewLines(m) {
+			if w := lineWidth(l); w > size[0] {
+				t.Errorf("%dx%d: line %d is %d cols wide", size[0], size[1], i, w)
+			}
+		}
+	}
+}
+
+// Trailing blank lines in AWX stdout left a dead band above the footer and
+// made a full scroll stop short of the last real line.
+func TestOutputDropsTrailingBlankLines(t *testing.T) {
+	m := openOutputView(t, outputMock(t))
+	m.setOutput(playOutput + "\n\n\n\n")
+	if last := m.outputLines[len(m.outputLines)-1]; strings.TrimSpace(stripANSI(last)) == "" {
+		t.Error("the last displayed line is blank")
+	}
+	// The raw text is untouched so a following chunk still joins correctly.
+	if !strings.HasSuffix(m.outputText, "\n\n\n\n") {
+		t.Error("outputText should keep every byte AWX sent")
+	}
+	m.vp.GotoBottom()
+	body := stripANSI(m.vp.View())
+	if !strings.Contains(body, "ok=3 changed=1") {
+		t.Errorf("a full scroll should end on the last real line, got:\n%s", body)
+	}
+	if strings.TrimSpace(body[strings.LastIndex(body, "\n"):]) == "" {
+		t.Error("the viewport still ends on a blank line")
+	}
+}

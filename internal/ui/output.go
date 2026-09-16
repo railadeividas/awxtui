@@ -45,7 +45,11 @@ func (m *Model) setOutput(text string) {
 	m.outputText = text
 	m.vp.Width = m.width
 	m.vp.Height = m.outputHeight()
-	m.outputLines = strings.Split(wrapANSI(text, m.width), "\n")
+	// AWX pads stdout with blank lines; rendering them leaves a dead band
+	// above the footer and makes "100%" stop short of the last real line.
+	// Only the display copy is trimmed: outputText keeps every byte so the
+	// next streamed chunk still joins at the right place.
+	m.outputLines = trimTrailingBlank(strings.Split(wrapANSI(text, m.width), "\n"))
 	m.findMatches()
 	m.vp.SetContent(m.outputContent())
 	if m.follow {
@@ -75,6 +79,15 @@ func (m *Model) findMatches() {
 			break
 		}
 	}
+}
+
+// trimTrailingBlank drops empty lines from the end, keeping at least one.
+func trimTrailingBlank(lines []string) []string {
+	end := len(lines)
+	for end > 1 && strings.TrimSpace(ansi.Strip(lines[end-1])) == "" {
+		end--
+	}
+	return lines[:end]
 }
 
 func (m Model) currentMatchLine() int {

@@ -336,7 +336,8 @@ func (m *Model) openOutput(job awx.Job) tea.Cmd {
 }
 
 func (m Model) outputHeight() int {
-	h := m.height - 6
+	// title line, rule, rule, footer
+	h := m.height - 4
 	if h < 3 {
 		h = 3
 	}
