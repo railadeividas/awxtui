@@ -492,19 +492,52 @@ func (m Model) statusView() string {
 	return m.statusOrKeys(keyHelp(keys), "")
 }
 
-// statusOrKeys shows an error or notice when there is one, otherwise the keys.
+// statusOrKeys keeps the key legend on screen and puts an error or notice to
+// its right. A message is transient; the keys are how you leave the screen, so
+// the keys hold their place and the message takes whatever room is left. Only
+// when that room is too small to say anything useful does the message take the
+// line — an unreadable error is worse than a missing legend.
 func (m Model) statusOrKeys(keys, right string) string {
+	var msg, hint string
 	switch {
 	case m.err != nil:
-		// The hint goes on the right so the error text cannot crowd it out.
-		right = dimStyle.Render("e for details  ") + right
-		msg := errStyle.Render("✗ " + oneLine(m.err.Error()))
-		return m.spread(cell(msg, max(0, m.width-lipgloss.Width(right)-1)), right)
+		msg = errStyle.Render("✗ " + oneLine(m.err.Error()))
+		hint = dimStyle.Render("e for details")
 	case m.notice != "":
-		msg := okStyle.Render("✓ " + oneLine(m.notice))
-		return m.spread(cell(msg, max(0, m.width-lipgloss.Width(right)-1)), right)
+		msg = okStyle.Render("✓ " + oneLine(m.notice))
+	default:
+		return m.spread(keys, right)
 	}
-	return m.spread(keys, right)
+
+	// Enough for a short notice or the head of an error; below that the
+	// message would say nothing, so it takes the line instead.
+	const minMsg = 16
+	reserved := lipgloss.Width(keys) + lipgloss.Width(right) + lipgloss.Width(hint) + 6
+	if room := m.width - reserved; room >= minMsg {
+		tail := truncateTo(msg, room)
+		if hint != "" {
+			tail += "  " + hint
+		}
+		if right != "" {
+			tail += "  " + right
+		}
+		return m.spread(keys, tail)
+	}
+	if hint != "" {
+		right = dimStyle.Render("e for details  ") + right
+	}
+	return m.spread(cell(msg, max(0, m.width-lipgloss.Width(right)-1)), right)
+}
+
+// truncateTo shortens s to w display cells, keeping its ANSI styling intact.
+func truncateTo(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) > w {
+		return ansi.Truncate(s, w, "…")
+	}
+	return s
 }
 
 func keyHelp(pairs [][2]string) string {

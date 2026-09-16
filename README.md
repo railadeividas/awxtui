@@ -217,6 +217,10 @@ the first page and merging it, so the pages you scrolled through stay put.
   without bound or make every poll re-wrap hundreds of megabytes.
 - **Errors get a real view**: the status bar shows one line and `e` opens the
   full text, itself marked as truncated if it still does not fit.
+- **The key legend never disappears**: errors and notices sit beside it, cut to
+  the room that is left, so the keys that get you out of a screen stay on
+  screen. Only a terminal too narrow to show both gives the line to the
+  message.
 
 ## Not done yet
 
