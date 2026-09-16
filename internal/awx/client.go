@@ -16,10 +16,24 @@ import (
 
 // Client talks to a single AWX instance with a bearer token.
 type Client struct {
-	baseURL string
-	token   string
-	http    *http.Client
+	baseURL  string
+	token    string
+	http     *http.Client
+	readOnly bool
 }
+
+// ErrReadOnly is returned when a read-only client is asked to change state.
+var ErrReadOnly = errors.New("client is read-only: refusing to modify AWX")
+
+// ReadOnly returns the client restricted to GET requests, so it cannot launch,
+// cancel or modify anything. Use it when pointing at a production instance.
+func (c *Client) ReadOnly() *Client {
+	c.readOnly = true
+	return c
+}
+
+// IsReadOnly reports whether state-changing requests are blocked.
+func (c *Client) IsReadOnly() bool { return c.readOnly }
 
 // New builds a client for baseURL, e.g. https://awx.example.com. Trailing
 // slashes and an explicit /api/v2 suffix are both tolerated.
@@ -40,6 +54,9 @@ func New(baseURL, token string, insecure bool) *Client {
 func (c *Client) BaseURL() string { return c.baseURL }
 
 func (c *Client) request(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	if c.readOnly && method != http.MethodGet {
+		return nil, fmt.Errorf("%w (%s %s)", ErrReadOnly, method, path)
+	}
 	u := path
 	if !strings.HasPrefix(path, "http") {
 		u = c.baseURL + path
@@ -219,26 +236,6 @@ type Host struct {
 
 func (c *Client) Hosts(ctx context.Context, inventoryID int) ([]Host, error) {
 	return list[Host](ctx, c, fmt.Sprintf("/api/v2/inventories/%d/hosts/?order_by=name&page_size=200", inventoryID))
-}
-
-// Launch starts a job template and returns the created job. extraVars, when
-// non-empty, must be a JSON object and is sent as extra_vars.
-func (c *Client) Launch(ctx context.Context, templateID int, extraVars string) (Job, error) {
-	payload := map[string]any{}
-	if v := strings.TrimSpace(extraVars); v != "" {
-		var vars map[string]any
-		if err := json.Unmarshal([]byte(v), &vars); err != nil {
-			return Job{}, fmt.Errorf("extra vars must be a JSON object: %w", err)
-		}
-		payload["extra_vars"] = vars
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return Job{}, err
-	}
-	var j Job
-	err = c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v2/job_templates/%d/launch/", templateID), strings.NewReader(string(raw)), &j)
-	return j, err
 }
 
 // Cancel requests cancellation of a running job.

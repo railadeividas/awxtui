@@ -76,6 +76,10 @@ func (m Model) headerView() string {
 	}
 	left += "  " + metaStyle.Render(who)
 
+	if m.client.IsReadOnly() {
+		left += "  " + warnStyle.Render("read-only")
+	}
+
 	right := ""
 	if m.inflight > 0 {
 		right = m.spin.View() + metaStyle.Render(" loading")
@@ -171,32 +175,209 @@ func clip(s string, h int) string {
 	return strings.Join(lines[:max(h, 1)], "\n")
 }
 
+// launchModal renders the launch form: prompted values, survey questions and
+// credential passwords, scrolled so the focused field stays visible.
 func (m Model) launchModal() string {
-	t := m.launchTarget
-	if t == nil {
-		return ""
+	f := &m.form
+	inner := min(m.width-8, 78)
+
+	var head strings.Builder
+	head.WriteString(titleStyle.Render("Launch") + "  " + rowStyle.Render(f.template.Name))
+	head.WriteString("\n")
+	meta := []string{fmt.Sprintf("#%d", f.template.ID)}
+	if p := f.template.SummaryFields.Project.Name; p != "" {
+		meta = append(meta, "project "+p)
 	}
+	if inv := f.config.Defaults.Inventory.Name; inv != "" {
+		meta = append(meta, "inventory "+inv)
+	}
+	if f.template.Playbook != "" {
+		meta = append(meta, f.template.Playbook)
+	}
+	head.WriteString(metaStyle.Render(strings.Join(meta, "  ·  ")))
+
+	if m.client.IsReadOnly() {
+		head.WriteString("\n" + warnStyle.Render("read-only mode: this form cannot be submitted"))
+	}
+
+	var body string
+	if f.canStartImmediately() {
+		body = "\n\n" + rowStyle.Render("This template needs no input.") + "\n"
+	} else {
+		body = "\n\n" + m.formFields(inner)
+	}
+
+	keys := [][2]string{{"enter", "launch"}, {"↑↓", "field"}}
+	if len(f.fields) > 0 {
+		switch f.fields[f.cursor].kind {
+		case fChoice:
+			keys = append(keys, [2]string{"←→", "choose"})
+		case fMultiChoice:
+			keys = append(keys, [2]string{"←→", "move"}, [2]string{"space", "toggle"})
+		case fTextarea:
+			keys = [][2]string{{"ctrl+s", "launch"}, {"↑↓", "field"}, {"enter", "newline"}}
+		}
+	}
+	keys = append(keys, [2]string{"esc", "cancel"})
+
+	foot := "\n\n" + keyHelp(keys)
+	if f.problem != "" {
+		foot = "\n\n" + errStyle.Render("✗ "+oneLine(f.problem)) + "\n" + keyHelp(keys)
+	}
+	return modalStyle.Width(inner).Render(head.String() + body + foot)
+}
+
+// formFields renders the field list, windowed around the focused field.
+func (m Model) formFields(inner int) string {
+	f := &m.form
+	labelW := 0
+	for i := range f.fields {
+		if w := lipgloss.Width(fieldLabel(&f.fields[i])); w > labelW {
+			labelW = w
+		}
+	}
+	labelW = min(labelW, max(inner/3, 12))
+
+	blocks := make([]string, len(f.fields))
+	for i := range f.fields {
+		blocks[i] = m.renderField(&f.fields[i], i == f.cursor, labelW, inner)
+	}
+
+	// Budget: the modal body minus header, footer and border.
+	budget := max(m.tableHeight()-8, 4)
+	first, last, used := f.cursor, f.cursor, countLines(blocks[f.cursor])
+	for first > 0 || last < len(blocks)-1 {
+		grew := false
+		if first > 0 && used+countLines(blocks[first-1])+sectionLines(f, first-1) <= budget {
+			first--
+			used += countLines(blocks[first]) + sectionLines(f, first)
+			grew = true
+		}
+		if last < len(blocks)-1 && used+countLines(blocks[last+1])+sectionLines(f, last+1) <= budget {
+			last++
+			used += countLines(blocks[last]) + sectionLines(f, last)
+			grew = true
+		}
+		if !grew {
+			break
+		}
+	}
+
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Launch job template"))
-	b.WriteString("\n\n")
-	b.WriteString(rowStyle.Render(t.Name))
-	b.WriteString("\n")
-	meta := []string{fmt.Sprintf("#%d", t.ID)}
-	if t.SummaryFields.Project.Name != "" {
-		meta = append(meta, "project "+t.SummaryFields.Project.Name)
+	if first > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", first)) + "\n")
 	}
-	if t.SummaryFields.Inventory.Name != "" {
-		meta = append(meta, "inventory "+t.SummaryFields.Inventory.Name)
+	for i := first; i <= last; i++ {
+		if sectionLines(f, i) > 0 {
+			heading := string(f.fields[i].section)
+			if f.fields[i].section == secSurvey && strings.TrimSpace(f.survey.Name) != "" {
+				heading = f.survey.Name
+			}
+			b.WriteString(headerStyle.Render(strings.ToUpper(heading)) + "\n")
+		}
+		b.WriteString(blocks[i])
+		if i < last {
+			b.WriteString("\n")
+		}
 	}
-	if t.Playbook != "" {
-		meta = append(meta, t.Playbook)
+	if last < len(blocks)-1 {
+		b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(blocks)-1-last)))
 	}
-	b.WriteString(metaStyle.Render(strings.Join(meta, "  ·  ")))
-	b.WriteString("\n\n")
-	b.WriteString(m.varsInput.View())
-	b.WriteString("\n\n")
-	b.WriteString(keyHelp([][2]string{{"enter", "launch"}, {"esc", "cancel"}}))
-	return modalStyle.Width(min(m.width-6, 72)).Render(b.String())
+	return b.String()
+}
+
+// sectionLines reports whether field i starts a new section heading.
+func sectionLines(f *form, i int) int {
+	if i == 0 || f.fields[i].section != f.fields[i-1].section {
+		return 1
+	}
+	return 0
+}
+
+func fieldLabel(fl *formField) string {
+	label := fl.label
+	if fl.required {
+		label = "*" + label
+	}
+	return label
+}
+
+func (m Model) renderField(fl *formField, focused bool, labelW, inner int) string {
+	prefix, label := " ", dimStyle.Render(cell(fieldLabel(fl), labelW))
+	if focused {
+		prefix = helpKeyStyle.Render("▌")
+		label = rowStyle.Bold(true).Render(cell(fieldLabel(fl), labelW))
+	}
+
+	var value string
+	switch fl.kind {
+	case fChoice:
+		choice := "—"
+		if fl.idx < len(fl.choices) {
+			choice = fl.choices[fl.idx]
+		}
+		marker := dimStyle
+		if focused {
+			marker = helpKeyStyle
+		}
+		value = marker.Render("‹ ") + rowStyle.Render(choice) + marker.Render(" ›")
+
+	case fMultiChoice:
+		parts := []string{"  "}
+		for i, c := range fl.choices {
+			box := "[ ]"
+			if i < len(fl.chosen) && fl.chosen[i] {
+				box = "[x]"
+			}
+			item := box + " " + c
+			switch {
+			case focused && i == fl.idx:
+				item = helpKeyStyle.Render(item)
+			case fl.chosen[i]:
+				item = rowStyle.Render(item)
+			default:
+				item = dimStyle.Render(item)
+			}
+			parts = append(parts, item)
+		}
+		value = parts[0] + strings.Join(parts[1:], "  ")
+
+	case fTextarea:
+		if focused {
+			lines := strings.Split(fl.area.View(), "\n")
+			for i, l := range lines {
+				lines[i] = "    " + l
+			}
+			return prefix + label + "\n" + strings.Join(lines, "\n")
+		}
+		v := strings.TrimSpace(fl.area.Value())
+		switch {
+		case v == "":
+			value = dimStyle.Render("  (empty)")
+		case strings.Contains(v, "\n"):
+			value = rowStyle.Render("  "+oneLine(v)) + dimStyle.Render(" …")
+		default:
+			value = rowStyle.Render("  " + v)
+		}
+
+	default:
+		if focused {
+			value = "  " + fl.input.View()
+		} else if v := fl.input.Value(); v != "" {
+			if fl.kind == fPassword {
+				v = strings.Repeat("•", min(len(v), 12))
+			}
+			value = rowStyle.Render("  " + v)
+		} else {
+			value = dimStyle.Render("  " + firstNonEmpty(fl.input.Placeholder, "(empty)"))
+		}
+	}
+
+	line := prefix + label + "  " + value
+	if focused && fl.help != "" {
+		line += "\n" + cell("", labelW+2) + dimStyle.Render(oneLine(fl.help))
+	}
+	return line
 }
 
 func (m Model) helpModal() string {

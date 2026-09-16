@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -64,7 +65,6 @@ type Model struct {
 	jobs      []awx.Job
 
 	filterInput textinput.Model
-	varsInput   textinput.Model
 	spin        spinner.Model
 	inflight    int
 
@@ -82,8 +82,8 @@ type Model struct {
 	hostCursor int
 	hostOffset int
 
-	// launch modal target
-	launchTarget *awx.JobTemplate
+	// launch form for the selected template
+	form form
 
 	notice       string
 	err          error
@@ -97,12 +97,7 @@ func New(c *awx.Client) Model {
 	fi.Placeholder = "type to filter…"
 	fi.PromptStyle = helpKeyStyle
 	fi.TextStyle = inputStyle
-
-	vi := textinput.New()
-	vi.Prompt = "extra_vars "
-	vi.Placeholder = `{"key": "value"}  (optional)`
-	vi.PromptStyle = helpKeyStyle
-	vi.TextStyle = inputStyle
+	fi.Cursor.SetMode(cursor.CursorStatic)
 
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	sp.Style = helpKeyStyle
@@ -111,7 +106,6 @@ func New(c *awx.Client) Model {
 		client:      c,
 		mode:        modeList,
 		filterInput: fi,
-		varsInput:   vi,
 		spin:        sp,
 		follow:      true,
 	}
@@ -236,7 +230,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.ready = true
 		m.filterInput.Width = max(10, m.width-12)
-		m.varsInput.Width = max(10, m.width-30)
 		if m.mode == modeOutput {
 			m.setOutput(m.outputText)
 		}
@@ -317,6 +310,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case launchFormMsg:
+		m.inflight = max(0, m.inflight-1)
+		m.notice = ""
+		m.form = newForm(msg.template, msg.config, msg.survey, msg.inventories, m.width)
+		m.mode = modeLaunch
+		return m, textinput.Blink
+
 	case launchedMsg:
 		m.inflight = max(0, m.inflight-1)
 		m.notice = fmt.Sprintf("launched job #%d", msg.job.ID)
@@ -378,28 +378,36 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "esc":
 			m.mode = modeList
-			m.varsInput.Blur()
-			m.launchTarget = nil
+			m.form = form{}
 			return m, nil
-		case "enter":
-			if m.launchTarget == nil {
-				m.mode = modeList
-				return m, nil
-			}
-			id := m.launchTarget.ID
-			vars := m.varsInput.Value()
-			m.mode = modeList
-			m.varsInput.Blur()
-			m.launchTarget = nil
-			m.err = nil
-			m.inflight++
-			return m, m.launch(id, vars)
 		case "ctrl+c":
 			return m, tea.Quit
 		}
-		var cmd tea.Cmd
-		m.varsInput, cmd = m.varsInput.Update(msg)
-		return m, cmd
+		submit, cmd := m.form.update(msg)
+		if !submit {
+			return m, cmd
+		}
+		if err := m.form.validate(); err != nil {
+			m.form.problem = err.Error()
+			return m, nil
+		}
+		payload, err := m.form.payload()
+		if err != nil {
+			m.form.problem = err.Error()
+			return m, nil
+		}
+		// The form is all GETs, so it opens in read-only mode; launching is
+		// where we stop.
+		if m.client.IsReadOnly() {
+			m.form.problem = "read-only mode: launching is disabled"
+			return m, nil
+		}
+		id := m.form.template.ID
+		m.mode = modeList
+		m.form = form{}
+		m.err = nil
+		m.inflight++
+		return m, m.launch(id, payload)
 
 	case modeHelp:
 		m.mode = modeList
@@ -423,6 +431,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.fetchOutput(m.outputJob.ID, 0)
 		case "c":
 			if m.outputJob.IsRunning() {
+				if m.client.IsReadOnly() {
+					m.err = fmt.Errorf("read-only mode: cancelling is disabled")
+					return m, nil
+				}
 				return m, m.cancelJob(m.outputJob.ID)
 			}
 			return m, nil
@@ -513,6 +525,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		if m.active == tabJobs {
 			if j, ok := m.selectedJob(); ok && j.IsRunning() {
+				if m.client.IsReadOnly() {
+					m.err = fmt.Errorf("read-only mode: cancelling is disabled")
+					return m, nil
+				}
 				return m, m.cancelJob(j.ID)
 			}
 		}
@@ -534,11 +550,9 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		m.launchTarget = &t
-		m.varsInput.SetValue("")
-		m.varsInput.Focus()
-		m.mode = modeLaunch
-		return m, textinput.Blink
+		m.err, m.notice = nil, "reading launch options…"
+		m.inflight++
+		return m, m.fetchLaunchForm(t)
 
 	case tabJobs:
 		j, ok := m.selectedJob()

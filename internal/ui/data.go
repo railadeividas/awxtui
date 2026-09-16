@@ -32,6 +32,13 @@ type (
 		more    bool
 	}
 	launchedMsg struct{ job awx.Job }
+	// launchFormMsg carries everything needed to build the launch form.
+	launchFormMsg struct {
+		template    awx.JobTemplate
+		config      awx.LaunchConfig
+		survey      awx.SurveySpec
+		inventories []awx.Inventory
+	}
 	canceledMsg struct{ id int }
 	errMsg      struct{ err error }
 	tickMsg     time.Time
@@ -162,16 +169,44 @@ func (m Model) fetchOutput(jobID, after int) tea.Cmd {
 	}
 }
 
-func (m Model) launch(templateID int, extraVars string) tea.Cmd {
+func (m Model) launch(templateID int, payload map[string]any) tea.Cmd {
 	c := m.client
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
-		job, err := c.Launch(ctx, templateID, extraVars)
+		job, err := c.Launch(ctx, templateID, payload)
 		if err != nil {
 			return errMsg{err}
 		}
 		return launchedMsg{job}
+	}
+}
+
+// fetchLaunchForm reads what a template needs before it can start: the
+// ask_*_on_launch prompts, its survey, and an inventory list when the template
+// lets the user choose one.
+func (m Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
+	c := m.client
+	return func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		cfg, err := c.LaunchConfig(ctx, t.ID)
+		if err != nil {
+			return errMsg{err}
+		}
+		msg := launchFormMsg{template: t, config: cfg}
+		if cfg.SurveyEnabled {
+			spec, err := c.SurveySpec(ctx, t.ID)
+			if err != nil {
+				return errMsg{err}
+			}
+			msg.survey = spec
+		}
+		if cfg.AskInventory {
+			// Best effort: the form falls back to typing an id.
+			msg.inventories, _ = c.Inventories(ctx)
+		}
+		return msg
 	}
 }
 

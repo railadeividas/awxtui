@@ -24,7 +24,9 @@ func TestLive(t *testing.T) {
 		t.Skip("AWX_URL and AWX_TOKEN must be set")
 	}
 
-	m := New(awx.New(url, token, os.Getenv("AWX_INSECURE") != ""))
+	// The instance behind AWX_URL is assumed to be production: pin the client
+	// read-only so this test can never launch or cancel anything.
+	m := New(awx.New(url, token, os.Getenv("AWX_INSECURE") != "").ReadOnly())
 	m = step(t, m, tea.WindowSizeMsg{Width: 140, Height: 36})
 	m = step(t, m, m.connect())
 	if m.err != nil {
@@ -69,5 +71,58 @@ func TestLive(t *testing.T) {
 		t.Logf("finished job #%d %s: %d bytes in %s",
 			m.outputJob.ID, m.outputJob.Status, len(m.outputText), time.Since(start).Round(time.Millisecond))
 		break
+	}
+}
+
+// TestLiveLaunchForm builds the launch form for a real template. The client is
+// read-only, so this only ever issues GETs: it can never launch anything.
+//
+//	AWXTUI_LIVE=1 AWXTUI_SHOW=1 go test -v ./internal/ui -run TestLiveLaunchForm
+func TestLiveLaunchForm(t *testing.T) {
+	if os.Getenv("AWXTUI_LIVE") == "" {
+		t.Skip("set AWXTUI_LIVE=1 to run against a real AWX instance")
+	}
+	url, token := os.Getenv("AWX_URL"), os.Getenv("AWX_TOKEN")
+	if url == "" || token == "" {
+		t.Skip("AWX_URL and AWX_TOKEN must be set")
+	}
+	name := os.Getenv("AWXTUI_LIVE_TEMPLATE")
+
+	client := awx.New(url, token, os.Getenv("AWX_INSECURE") != "").ReadOnly()
+	m := New(client)
+	m = step(t, m, tea.WindowSizeMsg{Width: 140, Height: 44})
+	m = step(t, m, m.connect())
+	if m.err != nil {
+		t.Fatalf("connect failed: %v", m.err)
+	}
+
+	picked := -1
+	for i, tpl := range m.templates {
+		if name == "" || strings.Contains(tpl.Name, name) {
+			picked = i
+			break
+		}
+	}
+	if picked < 0 {
+		t.Skipf("no template matching %q", name)
+	}
+	m.cursor[tabTemplates] = picked
+	tpl := m.templates[picked]
+
+	m = step(t, m, key("enter"))
+	if m.mode != modeLaunch {
+		t.Fatalf("form did not open for %q: mode %v err %v", tpl.Name, m.mode, m.err)
+	}
+	t.Logf("%s (#%d): survey=%v fields=%v",
+		tpl.Name, tpl.ID, m.form.config.SurveyEnabled, formKeys(&m))
+	show(t, "live launch form: "+tpl.Name, m.View())
+
+	// Submitting must be refused by the read-only client.
+	m = step(t, m, key("ctrl+s"))
+	if m.form.problem != "" && !strings.Contains(m.form.problem, "read-only") {
+		t.Logf("form reported: %s", m.form.problem)
+	}
+	if m.mode != modeLaunch {
+		t.Fatal("read-only client must not submit the form")
 	}
 }

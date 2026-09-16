@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,9 +17,32 @@ import (
 	"github.com/railadeividas/awxtui/internal/awx"
 )
 
+// mock is a fake AWX instance that also records what was launched.
+type mock struct {
+	*httptest.Server
+	mu       sync.Mutex
+	launches []map[string]any
+}
+
+func (m *mock) lastLaunch() map[string]any {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.launches) == 0 {
+		return nil
+	}
+	return m.launches[len(m.launches)-1]
+}
+
+func (m *mock) launchCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.launches)
+}
+
 // mockAWX serves just enough of the v2 API to drive the UI.
-func mockAWX(t *testing.T) *httptest.Server {
+func mockAWX(t *testing.T) *mock {
 	t.Helper()
+	mk := &mock{}
 	now := time.Now().UTC()
 	page := func(results ...any) map[string]any {
 		return map[string]any{"count": len(results), "results": results}
@@ -46,6 +70,7 @@ func mockAWX(t *testing.T) *httptest.Server {
 			},
 		}, map[string]any{
 			"id": 8, "name": "Rotate certificates", "job_type": "run", "playbook": "certs.yml",
+			"survey_enabled": true,
 			"summary_fields": map[string]any{
 				"project":   map[string]any{"name": "security"},
 				"inventory": map[string]any{"name": "all"},
@@ -113,10 +138,67 @@ func mockAWX(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/v2/jobs/43/cancel/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	})
-	mux.HandleFunc("/api/v2/job_templates/7/launch/", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		write(w, map[string]any{"id": 43, "name": "Deploy web app", "status": "pending"})
+	// Template 7 prompts for most ask_* values; template 8 has a survey.
+	launchConfig := func(id int, survey bool) map[string]any {
+		return map[string]any{
+			"can_start_without_user_input": false,
+			"passwords_needed_to_start":    []string{},
+			"variables_needed_to_start":    []string{},
+			"survey_enabled":               survey,
+			"inventory_needed_to_start":    false,
+			"ask_inventory_on_launch":      id == 7,
+			"ask_limit_on_launch":          true,
+			"ask_tags_on_launch":           id == 7,
+			"ask_variables_on_launch":      true,
+			"ask_job_type_on_launch":       id == 7,
+			"ask_verbosity_on_launch":      id == 7,
+			"ask_timeout_on_launch":        id == 7,
+			"ask_diff_mode_on_launch":      id == 7,
+			"defaults": map[string]any{
+				"limit": "", "job_tags": "", "skip_tags": "", "scm_branch": "",
+				"extra_vars": "{}", "job_type": "run", "verbosity": 0,
+				"diff_mode": false, "timeout": 0, "forks": 5,
+				"inventory": map[string]any{"id": 3, "name": "production"},
+			},
+		}
+	}
+	launch := func(id int, survey bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				write(w, launchConfig(id, survey))
+				return
+			}
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, `{"detail":"bad payload"}`, http.StatusBadRequest)
+				return
+			}
+			mk.mu.Lock()
+			mk.launches = append(mk.launches, body)
+			mk.mu.Unlock()
+			write(w, map[string]any{"id": 43, "name": "Deploy web app", "status": "pending"})
+		}
+	}
+	mux.HandleFunc("/api/v2/job_templates/7/launch/", launch(7, false))
+	mux.HandleFunc("/api/v2/job_templates/8/launch/", launch(8, true))
+	mux.HandleFunc("/api/v2/job_templates/8/survey_spec/", func(w http.ResponseWriter, r *http.Request) {
+		one, ten := 1, 10
+		write(w, map[string]any{"name": "Deploy options", "spec": []any{
+			map[string]any{"type": "text", "variable": "release", "question_name": "Release tag",
+				"question_description": "git tag to deploy", "required": true, "default": ""},
+			map[string]any{"type": "integer", "variable": "batch", "question_name": "Batch size",
+				"required": false, "default": 2, "min": one, "max": ten},
+			map[string]any{"type": "float", "variable": "ratio", "question_name": "Ratio",
+				"required": false, "default": 0.5},
+			map[string]any{"type": "multiplechoice", "variable": "env", "question_name": "Environment",
+				"required": true, "default": "staging", "choices": "staging\nproduction"},
+			map[string]any{"type": "multiselect", "variable": "steps", "question_name": "Steps",
+				"required": false, "default": []string{"build"}, "choices": []string{"build", "migrate", "smoke"}},
+			map[string]any{"type": "password", "variable": "api_key", "question_name": "API key",
+				"required": false, "default": ""},
+			map[string]any{"type": "textarea", "variable": "notes", "question_name": "Notes",
+				"required": false, "default": ""},
+		}})
 	})
 	mux.HandleFunc("/api/v2/inventories/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, page(map[string]any{
@@ -137,9 +219,9 @@ func mockAWX(t *testing.T) *httptest.Server {
 			"status": "successful", "last_updated": now.Add(-3 * time.Hour),
 		}))
 	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
+	mk.Server = httptest.NewServer(mux)
+	t.Cleanup(mk.Close)
+	return mk
 }
 
 // step applies a message and drains the returned command synchronously.
@@ -167,12 +249,31 @@ func settle(t *testing.T, m Model, msg tea.Msg, depth int) Model {
 	return m
 }
 
-// drain executes a command (flattening batches) and collects its messages.
+// drainTimeout bounds how long drain waits for one command. Against the mock
+// server real work is local HTTP (sub-millisecond), so anything slower is a UI
+// timer such as a poll tick, which the tests do not care about. Live tests talk
+// to a real instance over the network and need a real timeout.
+var drainTimeout = func() time.Duration {
+	if os.Getenv("AWXTUI_LIVE") != "" {
+		return 60 * time.Second
+	}
+	return 400 * time.Millisecond
+}()
+
+// drain executes a command (flattening batches) and collects its messages,
+// skipping commands that are really just timers.
 func drain(cmd tea.Cmd) []tea.Msg {
 	if cmd == nil {
 		return nil
 	}
-	msg := cmd()
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	var msg tea.Msg
+	select {
+	case msg = <-done:
+	case <-time.After(drainTimeout):
+		return nil
+	}
 	if batch, ok := msg.(tea.BatchMsg); ok {
 		var out []tea.Msg
 		for _, c := range batch {
@@ -191,10 +292,71 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	case "left":
+		return tea.KeyMsg{Type: tea.KeyLeft}
+	case "right":
+		return tea.KeyMsg{Type: tea.KeyRight}
+	case "space":
+		return tea.KeyMsg{Type: tea.KeySpace}
+	case "ctrl+s":
+		return tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+// typeText sends each rune of s as a key press.
+func typeText(t *testing.T, m Model, s string) Model {
+	t.Helper()
+	for _, r := range s {
+		m = step(t, m, key(string(r)))
+	}
+	return m
+}
+
+// fieldByKey finds a form field, failing the test when it is missing.
+func fieldByKey(t *testing.T, m *Model, key string) *formField {
+	t.Helper()
+	for i := range m.form.fields {
+		if m.form.fields[i].key == key {
+			return &m.form.fields[i]
+		}
+	}
+	t.Fatalf("form has no %q field; has %v", key, formKeys(m))
+	return nil
+}
+
+func formKeys(m *Model) []string {
+	var out []string
+	for i := range m.form.fields {
+		out = append(out, m.form.fields[i].key)
+	}
+	return out
+}
+
+// focusField moves the form cursor onto a named field.
+func focusField(t *testing.T, m Model, key string) Model {
+	t.Helper()
+	for i := range m.form.fields {
+		if m.form.fields[i].key == key {
+			for m.form.cursor < i {
+				m = step(t, m, tea.KeyMsg{Type: tea.KeyDown})
+			}
+			for m.form.cursor > i {
+				m = step(t, m, tea.KeyMsg{Type: tea.KeyUp})
+			}
+			return m
+		}
+	}
+	t.Fatalf("cannot focus %q; form has %v", key, formKeys(&m))
+	return m
 }
 
 func TestFlows(t *testing.T) {
@@ -231,6 +393,9 @@ func TestFlows(t *testing.T) {
 	}
 	show(t, "launch modal", m.View())
 	m = step(t, m, key("enter"))
+	if m.err != nil {
+		t.Fatalf("launch failed: %v", m.err)
+	}
 	if m.mode != modeOutput || m.outputJob.ID != 43 {
 		t.Fatalf("launch should open output for job 43, got mode %v job %d (err %v)", m.mode, m.outputJob.ID, m.err)
 	}
