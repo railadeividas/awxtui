@@ -48,6 +48,24 @@ func mockAWX(t *testing.T) *mock {
 		return map[string]any{"count": len(results), "results": results}
 	}
 	mux := http.NewServeMux()
+	// searched mirrors AWX's ?search=: a case-insensitive match over the
+	// record's name and description.
+	searched := func(r *http.Request, items []any) []any {
+		q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
+		if q == "" {
+			return items
+		}
+		var hits []any
+		for _, it := range items {
+			m, _ := it.(map[string]any)
+			name, _ := m["name"].(string)
+			desc, _ := m["description"].(string)
+			if strings.Contains(strings.ToLower(name+" "+desc), q) {
+				hits = append(hits, it)
+			}
+		}
+		return hits
+	}
 	write := func(w http.ResponseWriter, v any) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(v)
@@ -60,7 +78,7 @@ func mockAWX(t *testing.T) *mock {
 		write(w, page(map[string]any{"username": "admin"}))
 	})
 	mux.HandleFunc("/api/v2/job_templates/", func(w http.ResponseWriter, r *http.Request) {
-		write(w, page(map[string]any{
+		write(w, page(searched(r, []any{map[string]any{
 			"id": 7, "name": "Deploy web app", "job_type": "run", "playbook": "deploy.yml",
 			"last_job_run": now.Add(-90 * time.Minute),
 			"summary_fields": map[string]any{
@@ -76,10 +94,10 @@ func mockAWX(t *testing.T) *mock {
 				"inventory": map[string]any{"name": "all"},
 				"last_job":  map[string]any{"id": 41, "status": "failed"},
 			},
-		}))
+		}})...))
 	})
 	mux.HandleFunc("/api/v2/jobs/", func(w http.ResponseWriter, r *http.Request) {
-		write(w, page(map[string]any{
+		write(w, page(searched(r, []any{map[string]any{
 			"id": 43, "name": "Deploy web app", "status": "running", "elapsed": 12.4,
 			"started": now.Add(-12 * time.Second), "job_type": "run",
 			"summary_fields": map[string]any{"created_by": map[string]any{"username": "admin"}},
@@ -87,7 +105,7 @@ func mockAWX(t *testing.T) *mock {
 			"id": 42, "name": "Deploy web app", "status": "successful", "elapsed": 96.2,
 			"started": now.Add(-90 * time.Minute), "job_type": "run",
 			"summary_fields": map[string]any{"created_by": map[string]any{"username": "admin"}},
-		}))
+		}})...))
 	})
 	mux.HandleFunc("/api/v2/jobs/43/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, map[string]any{"id": 43, "name": "Deploy web app", "status": "running", "elapsed": 14.1})
@@ -314,11 +332,18 @@ func key(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
-// typeText sends each rune of s as a key press.
+// typeText sends each rune of s as a key press. Only the last keystroke's
+// commands are run, which is what happens in practice too: the debounced
+// search from an earlier keystroke is superseded before it fires.
 func typeText(t *testing.T, m Model, s string) Model {
 	t.Helper()
-	for _, r := range s {
-		m = step(t, m, key(string(r)))
+	runes := []rune(s)
+	for _, r := range runes[:max(len(runes)-1, 0)] {
+		next, _ := m.Update(key(string(r)))
+		m = next.(Model)
+	}
+	if len(runes) > 0 {
+		m = step(t, m, key(string(runes[len(runes)-1])))
 	}
 	return m
 }

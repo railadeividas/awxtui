@@ -34,21 +34,37 @@ func TestLive(t *testing.T) {
 		t.Fatalf("connect failed: %v", m.err)
 	}
 	t.Logf("connected as %s", m.user)
-	for _, t2 := range []struct {
+	for _, view := range []struct {
 		tab  tab
 		name string
 	}{{tabTemplates, "templates"}, {tabInventories, "inventories"}, {tabProjects, "projects"}} {
-		m = step(t, m, key(strconv.Itoa(int(t2.tab)+1)))
+		start := time.Now()
+		m = step(t, m, key(strconv.Itoa(int(view.tab)+1)))
 		if m.err != nil {
-			t.Fatalf("loading %s failed: %v", t2.name, m.err)
+			t.Fatalf("loading %s failed: %v", view.name, m.err)
 		}
-		loaded, total := len(m.rows[t2.tab]), m.count[t2.tab]
-		t.Logf("%s: %d loaded of %d reported, %d pages, label %q",
-			t2.name, loaded, total, m.pages[t2.tab], m.countLabel(t2.tab))
-		if total > loaded && m.pages[t2.tab] < maxPages {
-			t.Errorf("%s: only %d of %d loaded despite pages remaining", t2.name, loaded, total)
+		t.Logf("%s: %d loaded of %d reported in %s, label %q",
+			view.name, len(m.rows[view.tab]), m.count[view.tab],
+			time.Since(start).Round(time.Millisecond), m.countLabel(view.tab))
+		if len(m.rows[view.tab]) == 0 && m.count[view.tab] > 0 {
+			t.Errorf("%s: reported %d records but loaded none", view.name, m.count[view.tab])
 		}
 	}
+
+	// Server-side search must find a record regardless of which page it is on.
+	m = step(t, m, key("1"))
+	m = step(t, m, key("/"))
+	m = typeText(t, m, "dnstools")
+	t.Logf("search 'dnstools': %d rows, label %q, serverQuery %q",
+		len(m.visible(tabTemplates)), m.countLabel(tabTemplates), m.serverQuery[tabTemplates])
+	if len(m.visible(tabTemplates)) == 0 {
+		t.Errorf("server-side search for dnstools found nothing")
+	}
+	if m.serverQuery[tabTemplates] != "dnstools" {
+		t.Errorf("search did not reach AWX: serverQuery = %q", m.serverQuery[tabTemplates])
+	}
+	m = step(t, m, key("esc"))
+
 	m = step(t, m, key("1"))
 
 	m = step(t, m, key("2"))

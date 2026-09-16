@@ -32,7 +32,7 @@ func TestReadOnlyRefusesWrites(t *testing.T) {
 	}
 
 	// Reads must keep working.
-	if _, err := c.Jobs(ctx, ""); err != nil {
+	if _, err := c.Jobs(ctx, "", ""); err != nil {
 		t.Errorf("Jobs: %v", err)
 	}
 	for _, m := range methods {

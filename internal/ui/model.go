@@ -51,6 +51,8 @@ const (
 	// loadMoreWithin triggers the next page once the cursor comes this close
 	// to the end of what is loaded.
 	loadMoreWithin = 10
+	// searchDelay is how long typing must settle before AWX is queried.
+	searchDelay = 250 * time.Millisecond
 )
 
 // Model is the whole application state.
@@ -76,6 +78,13 @@ type Model struct {
 	count    [tabCount]int
 	pages    [tabCount]int
 	fetching [tabCount]bool
+
+	// server-side search state: the query the rows currently reflect, a
+	// sequence number so stale replies can be dropped, and whether a search
+	// request is in flight.
+	serverQuery [tabCount]string
+	searchSeq   [tabCount]int
+	searching   [tabCount]bool
 
 	templates   []awx.JobTemplate
 	jobs        []awx.Job
@@ -138,10 +147,12 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(m.connect, m.spin.Tick, tick(pollInterval))
 }
 
-// visible returns the rows of tab t after applying its filter.
+// visible returns the rows of tab t after applying its filter. When the rows
+// came from AWX for this exact query they are already the answer — filtering
+// them again locally would hide matches found on fields we do not render.
 func (m Model) visible(t tab) []row {
 	f := strings.ToLower(strings.TrimSpace(m.filters[t]))
-	if f == "" {
+	if f == "" || strings.EqualFold(m.serverQuery[t], strings.TrimSpace(m.filters[t])) {
 		return m.rows[t]
 	}
 	out := make([]row, 0, len(m.rows[t]))
@@ -193,18 +204,14 @@ func (m *Model) nextPage(t tab) tea.Cmd {
 	}
 	m.fetching[t] = true
 	m.pages[t]++
-	return m.fetch(t, m.next[t], true)
+	return m.fetch(t, m.next[t], m.serverQuery[t], true)
 }
 
-// continueLoad decides whether to keep pulling pages without being asked.
-// Templates, inventories and projects are read in full so that search covers
-// everything. Job lists are effectively unbounded, so they page in on demand —
-// except while a filter is active and showing too little to fill the screen.
+// continueLoad pulls another page when what is loaded would not even fill the
+// screen. Everything else is paged in on demand as the user scrolls.
 func (m *Model) continueLoad(t tab) tea.Cmd {
-	if t == tabJobs {
-		if m.filters[t] == "" || len(m.visible(t)) >= m.tableHeight() {
-			return nil
-		}
+	if len(m.visible(t)) >= m.tableHeight() {
+		return nil
 	}
 	return m.nextPage(t)
 }
@@ -262,7 +269,27 @@ func (m *Model) load(t tab, force bool) tea.Cmd {
 	m.inflight++
 	m.pages[t] = 1
 	m.next[t] = ""
-	return m.fetch(t, "", false)
+	return m.fetch(t, "", m.filters[t], false)
+}
+
+// runSearch asks AWX for the current filter text. Lists are paged in lazily,
+// so searching locally would only ever see the pages already loaded.
+func (m *Model) runSearch(t tab) tea.Cmd {
+	query := strings.TrimSpace(m.filters[t])
+	if query == m.serverQuery[t] {
+		return nil
+	}
+	m.searching[t] = true
+	m.pages[t] = 1
+	m.next[t] = ""
+	return m.fetch(t, "", query, false)
+}
+
+// searchable reports whether a filter needs the server: either the list is
+// incomplete, or we are already showing server-filtered rows. A complete list
+// with local matches is filtered in memory, which keeps typing instant.
+func (m *Model) searchable(t tab) bool {
+	return m.next[t] != "" || m.serverQuery[t] != ""
 }
 
 func (m *Model) openOutput(job awx.Job) tea.Cmd {
@@ -323,9 +350,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeList && m.active == tabJobs && time.Since(m.lastJobsPull) >= jobsAutoRefresh {
 			m.lastJobsPull = time.Now()
-			cmds = append(cmds, m.fetch(tabJobs, "", false))
+			cmds = append(cmds, m.fetch(tabJobs, "", m.serverQuery[tabJobs], false))
 		}
 		return m, tea.Batch(cmds...)
+
+	case searchTickMsg:
+		if msg.seq != m.searchSeq[msg.tab] {
+			return m, nil // the user kept typing
+		}
+		return m, m.runSearch(msg.tab)
 
 	case connectedMsg:
 		m.user = msg.user
@@ -333,11 +366,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case templatesMsg:
 		m.inflight = max(0, m.inflight-1)
-		m.fetching[tabTemplates] = false
+		if msg.seq != m.searchSeq[tabTemplates] {
+			return m, nil // a newer search has been issued
+		}
+		m.fetching[tabTemplates], m.searching[tabTemplates] = false, false
 		if msg.cont {
 			m.templates = append(m.templates, msg.items...)
 		} else {
 			m.templates = msg.items
+			m.serverQuery[tabTemplates] = msg.query
 		}
 		m.rows[tabTemplates] = templateRows(m.templates)
 		m.next[tabTemplates] = msg.next
@@ -348,13 +385,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case jobsMsg:
 		m.inflight = max(0, m.inflight-1)
-		m.fetching[tabJobs] = false
+		if msg.seq != m.searchSeq[tabJobs] {
+			return m, nil // a newer search has been issued
+		}
+		m.fetching[tabJobs], m.searching[tabJobs] = false, false
 		// A background refresh re-reads page one; merge it so the pages the
 		// user already scrolled through are not thrown away.
 		merged := false
 		switch {
 		case msg.cont:
 			m.jobs = append(m.jobs, msg.items...)
+		case msg.query != m.serverQuery[tabJobs]:
+			m.jobs = msg.items
+			m.serverQuery[tabJobs] = msg.query
 		case m.pages[tabJobs] > 1 && len(m.jobs) > 0:
 			m.jobs = mergeJobs(m.jobs, msg.items)
 			merged = true
@@ -373,11 +416,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case inventoriesMsg:
 		m.inflight = max(0, m.inflight-1)
-		m.fetching[tabInventories] = false
+		if msg.seq != m.searchSeq[tabInventories] {
+			return m, nil // a newer search has been issued
+		}
+		m.fetching[tabInventories], m.searching[tabInventories] = false, false
 		if msg.cont {
 			m.inventories = append(m.inventories, msg.items...)
 		} else {
 			m.inventories = msg.items
+			m.serverQuery[tabInventories] = msg.query
 		}
 		m.rows[tabInventories] = inventoryRows(m.inventories)
 		m.next[tabInventories] = msg.next
@@ -388,11 +435,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case projectsMsg:
 		m.inflight = max(0, m.inflight-1)
-		m.fetching[tabProjects] = false
+		if msg.seq != m.searchSeq[tabProjects] {
+			return m, nil // a newer search has been issued
+		}
+		m.fetching[tabProjects], m.searching[tabProjects] = false, false
 		if msg.cont {
 			m.projects = append(m.projects, msg.items...)
 		} else {
 			m.projects = msg.items
+			m.serverQuery[tabProjects] = msg.query
 		}
 		m.rows[tabProjects] = projectRows(m.projects)
 		m.next[tabProjects] = msg.next
@@ -445,11 +496,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = fmt.Sprintf("launched job #%d", msg.job.ID)
 		m.loaded[tabJobs] = false
 		cmd := m.openOutput(msg.job)
-		return m, tea.Batch(cmd, m.fetch(tabJobs, "", false))
+		return m, tea.Batch(cmd, m.fetch(tabJobs, "", m.serverQuery[tabJobs], false))
 
 	case canceledMsg:
 		m.notice = fmt.Sprintf("cancel requested for job #%d", msg.id)
-		return m, m.fetch(tabJobs, "", false)
+		return m, m.fetch(tabJobs, "", m.serverQuery[tabJobs], false)
 
 	case errMsg:
 		m.inflight = max(0, m.inflight-1)
@@ -483,6 +534,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filterInput.Blur()
 			m.mode = modeList
 			m.clampAll()
+			if m.serverQuery[m.active] != "" {
+				m.searchSeq[m.active]++
+				return m, m.runSearch(m.active)
+			}
 			return m, nil
 		case "enter":
 			m.filterInput.Blur()
@@ -495,6 +550,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filterInput, cmd = m.filterInput.Update(msg)
 		m.filters[m.active] = m.filterInput.Value()
 		m.cursor[m.active], m.offset[m.active] = 0, 0
+		// Ask AWX when the list is incomplete, and also when a complete list
+		// matches nothing locally: the server searches fields we do not show,
+		// such as descriptions.
+		if m.searchable(m.active) || len(m.visible(m.active)) == 0 {
+			m.searchSeq[m.active]++
+			return m, tea.Batch(cmd, searchDebounce(m.active, m.searchSeq[m.active]))
+		}
 		return m, tea.Batch(cmd, m.continueLoad(m.active))
 
 	case modeLaunch:
@@ -540,7 +602,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "q", "esc":
 			m.mode = modeList
-			return m, tea.Batch(m.fetch(tabJobs, "", false))
+			return m, tea.Batch(m.fetch(tabJobs, "", m.serverQuery[tabJobs], false))
 		case "ctrl+c":
 			return m, tea.Quit
 		case "f":
@@ -635,6 +697,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.filters[m.active] != "" {
 			m.filters[m.active] = ""
 			m.clampAll()
+			if m.serverQuery[m.active] != "" {
+				m.err, m.notice = nil, ""
+				m.searchSeq[m.active]++
+				return m, m.runSearch(m.active)
+			}
 		}
 		m.err, m.notice = nil, ""
 	case "r":

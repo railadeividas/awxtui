@@ -15,42 +15,44 @@ import (
 type (
 	connectedMsg struct{ user string }
 
-	// Each list message carries one page. cont marks a continuation of a list
-	// already on screen, as opposed to a fresh first page.
-	templatesMsg struct {
-		items []awx.JobTemplate
+	// pageMeta describes the page a list message carries. cont marks a
+	// continuation of a list already on screen; query is the server-side
+	// search it reflects; seq lets stale replies be dropped.
+	pageMeta struct {
 		next  string
 		count int
 		cont  bool
+		query string
+		seq   int
+	}
+	templatesMsg struct {
+		pageMeta
+		items []awx.JobTemplate
 	}
 	jobsMsg struct {
+		pageMeta
 		items []awx.Job
-		next  string
-		count int
-		cont  bool
 	}
 	inventoriesMsg struct {
+		pageMeta
 		items []awx.Inventory
-		next  string
-		count int
-		cont  bool
 	}
 	projectsMsg struct {
+		pageMeta
 		items []awx.Project
-		next  string
-		count int
-		cont  bool
 	}
 	hostsMsg struct {
+		pageMeta
 		inventory   string
 		inventoryID int
 		hosts       []awx.Host
-		next        string
-		count       int
-		cont        bool
 	}
-	// outputMsg carries a batch of job output. chunk holds the events newer
-	// than the counter that was requested; reset means replace, not append.
+	// searchTickMsg fires after the user stops typing, so a search is sent
+	// once rather than on every keystroke.
+	searchTickMsg struct {
+		tab tab
+		seq int
+	}
 	outputMsg struct {
 		job     awx.Job
 		chunk   string
@@ -87,53 +89,66 @@ func (m Model) connect() tea.Msg {
 	return connectedMsg{user}
 }
 
-// fetch requests one page of a list. An empty pageURL starts at the first page;
-// cont marks the result as a continuation to append.
-func (m Model) fetch(t tab, pageURL string, cont bool) tea.Cmd {
+// fetch requests one page of a list. An empty pageURL starts at the first
+// page, applying search server-side; cont marks the result as a continuation
+// to append. A page URL already carries the search it belongs to.
+func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 	c := m.client
+	meta := pageMeta{cont: cont, query: strings.TrimSpace(search), seq: m.searchSeq[t]}
 	switch t {
 	case tabTemplates:
 		return func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
-			p, err := c.JobTemplates(ctx, pageURL)
+			p, err := c.JobTemplates(ctx, pageURL, search)
 			if err != nil {
 				return errMsg{err}
 			}
-			return templatesMsg{items: p.Results, next: p.Next, count: p.Count, cont: cont}
+			meta.next, meta.count = p.Next, p.Count
+			return templatesMsg{pageMeta: meta, items: p.Results}
 		}
 	case tabJobs:
 		return func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
-			p, err := c.Jobs(ctx, pageURL)
+			p, err := c.Jobs(ctx, pageURL, search)
 			if err != nil {
 				return errMsg{err}
 			}
-			return jobsMsg{items: p.Results, next: p.Next, count: p.Count, cont: cont}
+			meta.next, meta.count = p.Next, p.Count
+			return jobsMsg{pageMeta: meta, items: p.Results}
 		}
 	case tabInventories:
 		return func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
-			p, err := c.Inventories(ctx, pageURL)
+			p, err := c.Inventories(ctx, pageURL, search)
 			if err != nil {
 				return errMsg{err}
 			}
-			return inventoriesMsg{items: p.Results, next: p.Next, count: p.Count, cont: cont}
+			meta.next, meta.count = p.Next, p.Count
+			return inventoriesMsg{pageMeta: meta, items: p.Results}
 		}
 	case tabProjects:
 		return func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
-			p, err := c.Projects(ctx, pageURL)
+			p, err := c.Projects(ctx, pageURL, search)
 			if err != nil {
 				return errMsg{err}
 			}
-			return projectsMsg{items: p.Results, next: p.Next, count: p.Count, cont: cont}
+			meta.next, meta.count = p.Next, p.Count
+			return projectsMsg{pageMeta: meta, items: p.Results}
 		}
 	}
 	return nil
+}
+
+// searchDebounce waits for typing to settle before querying AWX.
+func searchDebounce(t tab, seq int) tea.Cmd {
+	return tea.Tick(searchDelay, func(time.Time) tea.Msg {
+		return searchTickMsg{tab: t, seq: seq}
+	})
 }
 
 func (m Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.Cmd {
@@ -141,13 +156,13 @@ func (m Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
-		p, err := c.Hosts(ctx, inventoryID, pageURL)
+		p, err := c.Hosts(ctx, inventoryID, pageURL, "")
 		if err != nil {
 			return errMsg{err}
 		}
 		return hostsMsg{
-			inventory: name, inventoryID: inventoryID,
-			hosts: p.Results, next: p.Next, count: p.Count, cont: cont,
+			pageMeta:  pageMeta{next: p.Next, count: p.Count, cont: cont},
+			inventory: name, inventoryID: inventoryID, hosts: p.Results,
 		}
 	}
 }

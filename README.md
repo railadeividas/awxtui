@@ -121,14 +121,22 @@ There is also a live test against a real instance, skipped by default:
 AWXTUI_LIVE=1 go test -v ./internal/ui -run TestLive
 ```
 
-## Pagination
+## Pagination and search
 
-Templates, inventories and projects are read in full (200 per request), so
-search covers everything on the instance rather than the first page. Jobs are
-different — an instance can hold a hundred thousand of them — so they page in as
-you scroll, and keep paging while a search has too little to fill the screen.
-The count on the right of the search line shows what is loaded against what
-AWX reports, for example `100 of 97928`.
+Every list is read one page at a time (200 records, 100 for jobs) and pages in
+as you scroll toward the end, so startup costs one request per view no matter
+how large the instance is.
+
+Because a lazily loaded list is incomplete, `/` searches **AWX**, not just the
+rows on screen: the query is debounced, sent as `?search=`, and matches
+whatever that endpoint considers searchable — including descriptions the TUI
+never shows. Results page in the same way. A list that is already complete is
+filtered in memory so typing stays instant, and falls back to a server search
+if nothing matches locally.
+
+The count on the right of the search line shows the state: `200 of 209`,
+`1 matching`, `100 of 97928`, or `searching…`. Replies to a query you have
+already typed past are discarded, so results never flicker backwards.
 
 Every list stops after 25 pages and says `(page limit)` rather than walking an
 instance forever. The Jobs list refreshes in the background by re-reading only

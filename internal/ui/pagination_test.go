@@ -37,6 +37,21 @@ func (p *pagedMock) paginate(w http.ResponseWriter, r *http.Request, items []any
 	p.requests[r.URL.Path]++
 	p.mu.Unlock()
 
+	// AWX filters server-side before paging; match on name like it does.
+	if q := r.URL.Query().Get("search"); q != "" {
+		var hits []any
+		for _, it := range items {
+			m, _ := it.(map[string]any)
+			name, _ := m["name"].(string)
+			desc, _ := m["description"].(string)
+			hay := strings.ToLower(name + " " + desc)
+			if strings.Contains(hay, strings.ToLower(q)) {
+				hits = append(hits, it)
+			}
+		}
+		items = hits
+	}
+
 	size, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	if size <= 0 {
 		size = 25
@@ -68,6 +83,8 @@ func newPagedMock(t *testing.T, templates, jobs, hosts int) *pagedMock {
 	for i := 0; i < templates; i++ {
 		tpls = append(tpls, map[string]any{
 			"id": 1000 + i, "name": fmt.Sprintf("template-%03d", i),
+			// Only AWX can see this; the TUI never renders descriptions.
+			"description":    fmt.Sprintf("handles widget-%03d rollout", i),
 			"summary_fields": map[string]any{"project": map[string]any{"name": "infra"}},
 		})
 	}
@@ -123,29 +140,122 @@ func pagedModel(t *testing.T, p *pagedMock, w, h int) Model {
 	return step(t, m, m.connect())
 }
 
-// Templates are read in full so that search covers every one of them.
-func TestTemplatesLoadEveryPage(t *testing.T) {
+// Lists load one page at a time; search goes to AWX so it still covers every
+// record, not just the pages already pulled.
+func TestTemplatesSearchServerSide(t *testing.T) {
 	p := newPagedMock(t, 450, 0, 0)
 	m := pagedModel(t, p, 120, 30)
 
-	if got := len(m.rows[tabTemplates]); got != 450 {
-		t.Fatalf("loaded %d templates, want all 450", got)
+	if got := len(m.rows[tabTemplates]); got != 200 {
+		t.Fatalf("loaded %d templates, want just the first page of 200", got)
 	}
 	if m.count[tabTemplates] != 450 {
 		t.Errorf("count = %d, want 450", m.count[tabTemplates])
 	}
-	if m.next[tabTemplates] != "" {
-		t.Errorf("next = %q, want empty once the list is exhausted", m.next[tabTemplates])
+	if got := p.count("/api/v2/job_templates/"); got != 1 {
+		t.Errorf("made %d requests at startup, want 1", got)
 	}
-	// 450 items at 200 per page is three requests, not one per item.
-	if got := p.count("/api/v2/job_templates/"); got != 3 {
-		t.Errorf("made %d template requests, want 3", got)
-	}
-	// Search must reach a template that only exists on the last page.
+
+	// template-449 only exists on the last page, which was never fetched.
 	m = step(t, m, key("/"))
 	m = typeText(t, m, "template-449")
 	if got := len(m.visible(tabTemplates)); got != 1 {
-		t.Errorf("filtering for a last-page template matched %d rows, want 1", got)
+		t.Fatalf("search matched %d rows, want the 1 on the unfetched page", got)
+	}
+	if m.serverQuery[tabTemplates] != "template-449" {
+		t.Errorf("serverQuery = %q, want the search to have gone to AWX",
+			m.serverQuery[tabTemplates])
+	}
+	if got := m.countLabel(tabTemplates); got != "1 matching" {
+		t.Errorf("count label = %q, want %q", got, "1 matching")
+	}
+
+	// Clearing the search restores the unfiltered first page.
+	m = step(t, m, key("esc"))
+	if got := len(m.rows[tabTemplates]); got != 200 {
+		t.Errorf("after clearing the search, %d rows, want the first page back", got)
+	}
+	if m.serverQuery[tabTemplates] != "" {
+		t.Errorf("serverQuery = %q, want it cleared", m.serverQuery[tabTemplates])
+	}
+}
+
+// A search that matches more than a page still pages in on scroll.
+func TestSearchResultsPageIn(t *testing.T) {
+	p := newPagedMock(t, 450, 0, 0)
+	m := pagedModel(t, p, 120, 30)
+	m = step(t, m, key("/"))
+	m = typeText(t, m, "template-1") // 100 matches: template-100..199
+	m = step(t, m, key("enter"))     // leave the search box
+
+	if got := len(m.rows[tabTemplates]); got != 100 {
+		t.Fatalf("search loaded %d rows, want all 100 matches", got)
+	}
+	if got := m.countLabel(tabTemplates); got != "100 matching" {
+		t.Errorf("count label = %q", got)
+	}
+}
+
+// Replies to a search the user has already typed past must be ignored.
+func TestStaleSearchRepliesAreDropped(t *testing.T) {
+	p := newPagedMock(t, 450, 0, 0)
+	m := pagedModel(t, p, 120, 30)
+	m = step(t, m, key("/"))
+	m = typeText(t, m, "template-449")
+
+	rowsBefore := len(m.rows[tabTemplates])
+	// A late reply from an earlier keystroke arrives.
+	stale := templatesMsg{
+		pageMeta: pageMeta{query: "templ", count: 450, seq: m.searchSeq[tabTemplates] - 1},
+		items:    make([]awx.JobTemplate, 17),
+	}
+	m = step(t, m, stale)
+
+	if got := len(m.rows[tabTemplates]); got != rowsBefore {
+		t.Errorf("stale reply overwrote the rows: %d rows, want %d", got, rowsBefore)
+	}
+	if m.serverQuery[tabTemplates] != "template-449" {
+		t.Errorf("stale reply changed the active query to %q", m.serverQuery[tabTemplates])
+	}
+}
+
+// A complete list whose local filter matches nothing still asks AWX, which
+// searches fields the TUI never displays.
+func TestCompleteListFallsBackToServerSearch(t *testing.T) {
+	p := newPagedMock(t, 5, 0, 0)
+	m := pagedModel(t, p, 120, 30)
+	if m.next[tabTemplates] != "" {
+		t.Fatal("5 templates should arrive in a single complete page")
+	}
+
+	m = step(t, m, key("/"))
+	m = typeText(t, m, "widget-003") // only in the description
+
+	if got := len(m.visible(tabTemplates)); got != 1 {
+		t.Fatalf("matched %d rows, want the 1 whose description matches", got)
+	}
+	if m.serverQuery[tabTemplates] != "widget-003" {
+		t.Errorf("expected a fallback server search, serverQuery = %q",
+			m.serverQuery[tabTemplates])
+	}
+}
+
+// A list that is already complete is filtered locally, without a round trip.
+func TestCompleteListFiltersLocally(t *testing.T) {
+	p := newPagedMock(t, 5, 0, 0)
+	m := pagedModel(t, p, 120, 30)
+	if m.next[tabTemplates] != "" {
+		t.Fatal("5 templates should arrive in a single complete page")
+	}
+	before := p.count("/api/v2/job_templates/")
+
+	m = step(t, m, key("/"))
+	m = typeText(t, m, "template-003")
+	if got := len(m.visible(tabTemplates)); got != 1 {
+		t.Errorf("local filter matched %d rows, want 1", got)
+	}
+	if got := p.count("/api/v2/job_templates/"); got != before {
+		t.Errorf("made %d extra requests filtering a complete list", got-before)
 	}
 }
 
@@ -215,10 +325,10 @@ func TestJobsRefreshKeepsPagedRows(t *testing.T) {
 }
 
 // An instance with far more pages than we will ever read must not be walked
-// forever.
+// forever, however hard the user scrolls.
 func TestPageCapStopsRunawayPagination(t *testing.T) {
-	var requests int
 	var mu sync.Mutex
+	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v2/me/" {
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -242,17 +352,19 @@ func TestPageCapStopsRunawayPagination(t *testing.T) {
 	m = step(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = step(t, m, m.connect())
 
-	if m.pages[tabTemplates] > maxPages {
-		t.Errorf("pulled %d pages, cap is %d", m.pages[tabTemplates], maxPages)
+	// Scroll to the end far more times than the cap allows.
+	for i := 0; i < maxPages*2; i++ {
+		m = step(t, m, key("G"))
+	}
+
+	if m.pages[tabTemplates] != maxPages {
+		t.Errorf("stopped at %d pages, want the cap of %d", m.pages[tabTemplates], maxPages)
 	}
 	mu.Lock()
 	got := requests
 	mu.Unlock()
 	if got > maxPages {
 		t.Errorf("made %d requests, cap is %d", got, maxPages)
-	}
-	if got < 2 {
-		t.Errorf("made %d requests, expected it to follow at least one next link", got)
 	}
 	// The user needs to know the list is incomplete.
 	if label := m.countLabel(tabTemplates); !strings.Contains(label, "page limit") {
@@ -284,21 +396,20 @@ func TestHostsPageInOnDemand(t *testing.T) {
 	}
 }
 
-// Filtering a job list keeps pulling pages until the screen has something to
-// show, so a search is not silently limited to page one.
-func TestJobsFilterPullsMorePages(t *testing.T) {
+// Filtering jobs asks AWX, so a match on a page we never fetched still shows.
+func TestJobsFilterSearchesServerSide(t *testing.T) {
 	p := newPagedMock(t, 1, 250, 0)
 	m := pagedModel(t, p, 120, 30)
 	m = step(t, m, key("2"))
 	m = step(t, m, key("/"))
-	m = typeText(t, m, "job-24") // only matches jobs 240-249, on page three
+	m = typeText(t, m, "job-249") // last job, on the third page
 
-	if got := len(m.visible(tabJobs)); got == 0 {
-		t.Fatalf("filter matched nothing; only %d rows loaded of %d",
-			len(m.rows[tabJobs]), m.count[tabJobs])
+	if got := len(m.visible(tabJobs)); got != 1 {
+		t.Fatalf("search matched %d rows, want 1 (loaded %d of %d)",
+			got, len(m.rows[tabJobs]), m.count[tabJobs])
 	}
-	if got := len(m.rows[tabJobs]); got < 250 {
-		t.Errorf("loaded %d rows; expected paging to continue while filtering", got)
+	if m.serverQuery[tabJobs] != "job-249" {
+		t.Errorf("serverQuery = %q", m.serverQuery[tabJobs])
 	}
 }
 
@@ -307,8 +418,8 @@ func TestCountLabelReflectsPagingState(t *testing.T) {
 	p := newPagedMock(t, 450, 250, 0)
 	m := pagedModel(t, p, 120, 30)
 
-	if got := m.countLabel(tabTemplates); got != "450" {
-		t.Errorf("fully loaded label = %q, want %q", got, "450")
+	if got := m.countLabel(tabTemplates); got != "200 of 450" {
+		t.Errorf("partly loaded label = %q, want %q", got, "200 of 450")
 	}
 	m = step(t, m, key("2"))
 	if got := m.countLabel(tabJobs); got != "100 of 250" {
@@ -318,7 +429,7 @@ func TestCountLabelReflectsPagingState(t *testing.T) {
 	m = step(t, m, key("/"))
 	m = typeText(t, m, "template-1")
 	// Names are zero-padded, so "template-1" matches the 100 in template-1xx.
-	if got := m.countLabel(tabTemplates); got != "100 matched · 450" {
-		t.Errorf("filtered label = %q, want %q", got, "100 matched · 450")
+	if got := m.countLabel(tabTemplates); got != "100 matching" {
+		t.Errorf("searched label = %q, want %q", got, "100 matching")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -124,12 +125,27 @@ func list[T any](ctx context.Context, c *Client, path string) ([]T, error) {
 }
 
 // firstOr returns pageURL, or first when no page was given. AWX hands back
-// Next as a root-relative path, which do() resolves against the base URL.
+// Next as a root-relative path (query string included, so paging stays inside
+// a search), which do() resolves against the base URL.
 func firstOr(pageURL, first string) string {
 	if strings.TrimSpace(pageURL) == "" {
 		return first
 	}
 	return pageURL
+}
+
+// listURL builds a first-page URL. A non-empty search uses AWX's server-side
+// search, which matches across the endpoint's searchable fields rather than
+// only the names we happen to have loaded.
+func listURL(path, orderBy string, pageSize int, search string) string {
+	q := url.Values{
+		"order_by":  {orderBy},
+		"page_size": {strconv.Itoa(pageSize)},
+	}
+	if s := strings.TrimSpace(search); s != "" {
+		q.Set("search", s)
+	}
+	return path + "?" + q.Encode()
 }
 
 // Me returns the username of the authenticated user, used as a connection check.
@@ -171,9 +187,8 @@ type JobTemplate struct {
 
 // JobTemplates returns a page of job templates. Pass the Next value of a
 // previous page to continue; an empty pageURL starts at the beginning.
-func (c *Client) JobTemplates(ctx context.Context, pageURL string) (Page[JobTemplate], error) {
-	return listPage[JobTemplate](ctx, c,
-		firstOr(pageURL, fmt.Sprintf("/api/v2/job_templates/?order_by=name&page_size=%d", PageSize)))
+func (c *Client) JobTemplates(ctx context.Context, pageURL, search string) (Page[JobTemplate], error) {
+	return listPage[JobTemplate](ctx, c, firstOr(pageURL, listURL("/api/v2/job_templates/", "name", PageSize, search)))
 }
 
 // Job is a single (running or finished) job run.
@@ -206,9 +221,8 @@ func (j Job) IsRunning() bool {
 }
 
 // Jobs returns a page of jobs, newest first.
-func (c *Client) Jobs(ctx context.Context, pageURL string) (Page[Job], error) {
-	return listPage[Job](ctx, c,
-		firstOr(pageURL, fmt.Sprintf("/api/v2/jobs/?order_by=-id&page_size=%d", jobsPageSize)))
+func (c *Client) Jobs(ctx context.Context, pageURL, search string) (Page[Job], error) {
+	return listPage[Job](ctx, c, firstOr(pageURL, listURL("/api/v2/jobs/", "-id", jobsPageSize, search)))
 }
 
 // jobsPageSize is smaller than PageSize: job lists are effectively unbounded,
@@ -237,9 +251,8 @@ type Inventory struct {
 }
 
 // Inventories returns a page of inventories.
-func (c *Client) Inventories(ctx context.Context, pageURL string) (Page[Inventory], error) {
-	return listPage[Inventory](ctx, c,
-		firstOr(pageURL, fmt.Sprintf("/api/v2/inventories/?order_by=name&page_size=%d", PageSize)))
+func (c *Client) Inventories(ctx context.Context, pageURL, search string) (Page[Inventory], error) {
+	return listPage[Inventory](ctx, c, firstOr(pageURL, listURL("/api/v2/inventories/", "name", PageSize, search)))
 }
 
 // AllInventories walks every page of inventories, up to maxPages, for callers
@@ -248,7 +261,7 @@ func (c *Client) AllInventories(ctx context.Context, maxPages int) ([]Inventory,
 	var out []Inventory
 	next := ""
 	for i := 0; i < maxPages; i++ {
-		p, err := c.Inventories(ctx, next)
+		p, err := c.Inventories(ctx, next, "")
 		if err != nil {
 			return out, err
 		}
@@ -273,9 +286,8 @@ type Project struct {
 }
 
 // Projects returns a page of projects.
-func (c *Client) Projects(ctx context.Context, pageURL string) (Page[Project], error) {
-	return listPage[Project](ctx, c,
-		firstOr(pageURL, fmt.Sprintf("/api/v2/projects/?order_by=name&page_size=%d", PageSize)))
+func (c *Client) Projects(ctx context.Context, pageURL, search string) (Page[Project], error) {
+	return listPage[Project](ctx, c, firstOr(pageURL, listURL("/api/v2/projects/", "name", PageSize, search)))
 }
 
 // Host belongs to an inventory.
@@ -288,9 +300,9 @@ type Host struct {
 }
 
 // Hosts returns a page of an inventory's hosts.
-func (c *Client) Hosts(ctx context.Context, inventoryID int, pageURL string) (Page[Host], error) {
+func (c *Client) Hosts(ctx context.Context, inventoryID int, pageURL, search string) (Page[Host], error) {
 	return listPage[Host](ctx, c, firstOr(pageURL,
-		fmt.Sprintf("/api/v2/inventories/%d/hosts/?order_by=name&page_size=%d", inventoryID, PageSize)))
+		listURL(fmt.Sprintf("/api/v2/inventories/%d/hosts/", inventoryID), "name", PageSize, search)))
 }
 
 // Cancel requests cancellation of a running job.

@@ -122,8 +122,12 @@ func (m Model) countLabel(t tab) string {
 	loaded, total, shown := len(m.rows[t]), m.count[t], len(m.visible(t))
 	var label string
 	switch {
-	case m.filters[t] != "" && total > loaded:
-		label = fmt.Sprintf("%d matched · %d of %d", shown, loaded, total)
+	case m.searching[t]:
+		return "searching…"
+	case m.serverQuery[t] != "" && total > loaded:
+		label = fmt.Sprintf("%d of %d matching", loaded, total)
+	case m.serverQuery[t] != "":
+		label = fmt.Sprintf("%d matching", loaded)
 	case m.filters[t] != "":
 		label = fmt.Sprintf("%d matched · %d", shown, loaded)
 	case total > loaded:
