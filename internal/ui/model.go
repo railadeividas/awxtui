@@ -37,6 +37,7 @@ const (
 	modeHelp
 	modeError
 	modeInstances
+	modeProject
 )
 
 const (
@@ -134,6 +135,9 @@ type Model struct {
 
 	// launch form for the selected template
 	form form
+
+	// details of the selected project
+	project projectDetail
 
 	notice       string
 	err          error
@@ -477,6 +481,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampAll()
 		return m, m.continueLoad(tabProjects)
 
+	case playbooksMsg:
+		m.inflight = max(0, m.inflight-1)
+		// A reply for a project no longer on screen belongs to a details view
+		// that has since been closed or replaced.
+		if msg.gen != m.gen || m.mode != modeProject || msg.projectID != m.project.project.ID {
+			return m, nil
+		}
+		m.project.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.project.playbooks = msg.names
+		return m, nil
+
 	case hostsMsg:
 		m.inflight = max(0, m.inflight-1)
 		if msg.gen != m.gen {
@@ -644,6 +663,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeInstances:
 		return m.handleInstancesKey(msg)
 
+	case modeProject:
+		return m.handleProjectKey(msg)
+
 	case modeOutput:
 		return m.handleOutputKey(msg)
 
@@ -774,10 +796,11 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m, m.fetchHosts(r.id, name, "", false)
 
 	case tabProjects:
-		r, ok := m.selected()
-		if ok {
-			m.notice = fmt.Sprintf("project #%d — %s", r.id, stripANSI(r.cells[0]))
+		p, ok := m.selectedProject()
+		if !ok {
+			return m, nil
 		}
+		return m, m.openProject(p)
 	}
 	return m, nil
 }

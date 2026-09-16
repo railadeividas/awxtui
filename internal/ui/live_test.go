@@ -244,3 +244,51 @@ func TestLiveLaunchForm(t *testing.T) {
 		t.Fatal("read-only client must not submit the form")
 	}
 }
+
+// TestLiveProjectDetails opens the details of every real project. The client
+// is read-only, so this only ever issues GETs.
+//
+//	AWXTUI_LIVE=1 AWXTUI_SHOW=1 go test -v ./internal/ui -run TestLiveProjectDetails
+func TestLiveProjectDetails(t *testing.T) {
+	if os.Getenv("AWXTUI_LIVE") == "" {
+		t.Skip("set AWXTUI_LIVE=1 to run against a real AWX instance")
+	}
+	url, token := os.Getenv("AWX_URL"), os.Getenv("AWX_TOKEN")
+	if url == "" || token == "" {
+		t.Skip("AWX_URL and AWX_TOKEN must be set")
+	}
+
+	m := New(awx.New(url, token, os.Getenv("AWX_INSECURE") != "").ReadOnly())
+	m = step(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = step(t, m, m.connect())
+	if m.err != nil {
+		t.Fatalf("connect failed: %v", m.err)
+	}
+	m = step(t, m, key("4"))
+	if len(m.projects) == 0 {
+		t.Skip("no projects on this instance")
+	}
+
+	for i, p := range m.projects {
+		m.cursor[tabProjects] = i
+		m = step(t, m, key("enter"))
+		if m.mode != modeProject {
+			t.Fatalf("details did not open for %q: mode %v err %v", p.Name, m.mode, m.err)
+		}
+		if m.project.loading {
+			t.Errorf("%s: playbooks never settled", p.Name)
+		}
+		// A project that has never updated has no checkout, and AWX answers
+		// the playbooks call with an error rather than an empty list.
+		if m.err != nil && p.LastUpdated != nil {
+			t.Errorf("%s (#%d, updated %s): playbooks failed: %v",
+				p.Name, p.ID, ago(*p.LastUpdated), m.err)
+		}
+		t.Logf("%s (#%d): %s %s@%.7s, status %s, %d playbooks, %d body lines",
+			p.Name, p.ID, p.SCMTypeLabel(), p.SCMBranch, p.SCMRevision,
+			p.Status, len(m.project.playbooks), len(m.projectBody(m.projectWidth())))
+		show(t, "live project details: "+p.Name, m.View())
+		m = step(t, m, key("G"))
+		m = step(t, m, key("esc"))
+	}
+}

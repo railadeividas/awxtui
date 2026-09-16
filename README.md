@@ -94,7 +94,7 @@ NAME                     PROJECT      INVENTORY     LAST RUN       WHEN
 | `↑` `↓` / `j` `k` | move; `ctrl+d` / `ctrl+u` half page, `g` / `G` top / bottom |
 | `/` | search the current view (`esc` clears) |
 | `i` | switch to another configured instance |
-| `enter` | launch a template · open job output · list inventory hosts |
+| `enter` | launch a template · open job output · list inventory hosts · open project details |
 | `↑↓` / `tab` | move between fields in the launch form; `←→` pick a choice, `space` toggles a multiselect, `ctrl+s` submits |
 | `c` | cancel a running job |
 | `f` | toggle follow mode in the job output view |
@@ -158,6 +158,23 @@ Output for a running job is tailed from `job_events` (the same stream the web UI
 renders, available while the job runs); a finished job is fetched in one request
 from `/stdout/`, falling back to events if AWX has no stored stdout.
 
+## Project details
+
+`enter` on a project opens what AWX knows about it: status and when it last
+updated, organization, SCM type, URL, branch, refspec and the checked-out
+revision, its SCM credential, local path, the update flags that are actually
+set (update on launch, clean, delete on update, track submodules, allow branch
+override), the cache and job timeouts, and the playbooks found in the
+checkout. Nothing but the playbook list costs a request: AWX's project list
+returns the whole record.
+
+A project's details can be longer than the screen — the firewall project on
+the instance this was built against renders 22 lines — so the view scrolls
+with `↑↓`, `ctrl+d` / `ctrl+u` and `g` / `G`, and says which lines are shown.
+A manual project (no SCM type) says `manual` and `none reported` rather than
+leaving blank rows that look like a failed load, and `r` re-reads the
+playbooks, which a project that has never updated does not have.
+
 ## Layout
 
 | Path | What |
@@ -170,13 +187,15 @@ from `/stdout/`, falling back to events if AWX has no stored stdout.
 | `internal/ui` | Bubble Tea model, key handling, rendering |
 | `internal/ui/form.go` | launch form: fields, validation, payload building |
 | `internal/ui/output.go` | job output view: find, highlight, failure/task jumps |
+| `internal/ui/projects.go` | project details: SCM settings, update flags, playbooks |
 | `internal/ui/table.go` | responsive column layout (columns shrink, then drop) |
 | `internal/ui/theme.go` | colours and status badges |
 
 ## Tests
 
 `go test ./...` drives the whole model against a mock AWX API: connect, filter,
-launch, follow output, drill into inventory hosts, cancel a job, plus a check
+launch, follow output, drill into inventory hosts, read project details,
+cancel a job, plus a check
 that every view fits inside 80×24, 120×40 and 200×50 terminals.
 
 Set `AWXTUI_SHOW=1` to print the rendered views while testing:

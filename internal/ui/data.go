@@ -45,6 +45,15 @@ type (
 		pageMeta
 		items []awx.Project
 	}
+	// playbooksMsg carries the playbook names of one project. It carries its
+	// own error so the details view can stop saying "loading…" even when the
+	// endpoint fails.
+	playbooksMsg struct {
+		gen       int
+		projectID int
+		names     []string
+		err       error
+	}
 	hostsMsg struct {
 		pageMeta
 		inventory   string
@@ -168,6 +177,16 @@ func searchDebounce(t tab, seq int) tea.Cmd {
 	return tea.Tick(searchDelay, func(time.Time) tea.Msg {
 		return searchTickMsg{tab: t, seq: seq}
 	})
+}
+
+func (m Model) fetchPlaybooks(projectID int) tea.Cmd {
+	c, gen := m.client, m.gen
+	return func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		names, err := c.ProjectPlaybooks(ctx, projectID)
+		return playbooksMsg{gen: gen, projectID: projectID, names: names, err: err}
+	}
 }
 
 func (m Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.Cmd {

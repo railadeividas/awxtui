@@ -463,20 +463,61 @@ func (c *Client) AllCredentials(ctx context.Context, maxPages int) ([]Credential
 	return allPages(ctx, maxPages, c.Credentials)
 }
 
-// Project is a source of playbooks.
+// Project is a source of playbooks. The list endpoint already returns every
+// field below, so the details view needs no follow-up GET for anything but
+// the playbook names.
 type Project struct {
-	ID          int        `json:"id"`
-	Name        string     `json:"name"`
-	SCMType     string     `json:"scm_type"`
-	SCMURL      string     `json:"scm_url"`
-	SCMBranch   string     `json:"scm_branch"`
-	Status      string     `json:"status"`
-	LastUpdated *time.Time `json:"last_updated"`
+	ID                    int        `json:"id"`
+	Name                  string     `json:"name"`
+	Description           string     `json:"description"`
+	SCMType               string     `json:"scm_type"`
+	SCMURL                string     `json:"scm_url"`
+	SCMBranch             string     `json:"scm_branch"`
+	SCMRefspec            string     `json:"scm_refspec"`
+	SCMRevision           string     `json:"scm_revision"`
+	SCMClean              bool       `json:"scm_clean"`
+	SCMDeleteOnUpdate     bool       `json:"scm_delete_on_update"`
+	SCMTrackSubmodules    bool       `json:"scm_track_submodules"`
+	SCMUpdateOnLaunch     bool       `json:"scm_update_on_launch"`
+	SCMUpdateCacheTimeout int        `json:"scm_update_cache_timeout"`
+	AllowOverride         bool       `json:"allow_override"`
+	Timeout               int        `json:"timeout"`
+	LocalPath             string     `json:"local_path"`
+	Status                string     `json:"status"`
+	LastUpdated           *time.Time `json:"last_updated"`
+	Created               *time.Time `json:"created"`
+	SummaryFields         struct {
+		Organization struct {
+			Name string `json:"name"`
+		} `json:"organization"`
+		Credential struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"credential"`
+	} `json:"summary_fields"`
+}
+
+// SCMTypeLabel names the source. AWX leaves scm_type empty for a project
+// whose playbooks are managed on disk rather than pulled from source control.
+func (p Project) SCMTypeLabel() string {
+	if p.SCMType == "" {
+		return "manual"
+	}
+	return p.SCMType
 }
 
 // Projects returns a page of projects.
 func (c *Client) Projects(ctx context.Context, pageURL, search string) (Page[Project], error) {
 	return listPage[Project](ctx, c, firstOr(pageURL, listURL("/api/v2/projects/", "name", PageSize, search)))
+}
+
+// ProjectPlaybooks lists the playbook files AWX found in a project's
+// checkout. The endpoint answers a bare JSON array of names, not a page.
+func (c *Client) ProjectPlaybooks(ctx context.Context, projectID int) ([]string, error) {
+	var names []string
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v2/projects/%d/playbooks/", projectID), nil, &names)
+	return names, err
 }
 
 // Host belongs to an inventory.

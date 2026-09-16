@@ -50,6 +50,8 @@ func (m Model) View() string {
 		b.WriteString(m.pane(m.errorModal()))
 	case modeInstances:
 		b.WriteString(m.pane(m.instancesModal()))
+	case modeProject:
+		b.WriteString(m.pane(m.projectModal()))
 	case modeHosts:
 		b.WriteString(m.hostsBody())
 	default:
@@ -434,7 +436,7 @@ func (m Model) helpModal() string {
 		{"1-4 / tab", "switch view"},
 		{"↑↓ j k", "move  ·  ctrl+d ctrl+u half page  ·  g G top bottom"},
 		{"/", "search (esc clears)"},
-		{"enter", "launch · open job output · list inventory hosts"},
+		{"enter", "launch · open job output · list inventory hosts · project details"},
 		{"c", "cancel a running job"},
 		{"f", "follow job output"},
 		{"n / N", "next · previous search hit in output"},
@@ -456,6 +458,8 @@ func (m Model) statusView() string {
 	switch m.mode {
 	case modeHosts:
 		keys = [][2]string{{"↑↓", "move"}, {"esc", "back"}, {"?", "help"}, {"q", "quit"}}
+	case modeProject:
+		keys = [][2]string{{"↑↓", "scroll"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}}
 	case modeFilter:
 		keys = [][2]string{{"type", "to filter"}, {"enter", "keep"}, {"esc", "clear"}}
 	default:

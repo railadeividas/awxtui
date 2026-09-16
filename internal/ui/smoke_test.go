@@ -282,10 +282,39 @@ func mockAWX(t *testing.T) *mock {
 		))
 	})
 	mux.HandleFunc("/api/v2/projects/", func(w http.ResponseWriter, r *http.Request) {
-		write(w, page(map[string]any{
-			"id": 5, "name": "infra", "scm_type": "git", "scm_branch": "main",
-			"status": "successful", "last_updated": now.Add(-3 * time.Hour),
-		}))
+		write(w, page(searched(r, []any{map[string]any{
+			"id": 5, "name": "infra", "description": "fleet playbooks",
+			"scm_type": "git", "scm_branch": "main",
+			"scm_url":              "git@github.com:example/infra.git",
+			"scm_refspec":          "+refs/heads/*:refs/remotes/origin/*",
+			"scm_revision":         "3f6e384b8694bac33b6215675fca396f2831c2e1",
+			"scm_update_on_launch": true, "scm_clean": true, "allow_override": true,
+			"scm_update_cache_timeout": 60, "timeout": 0,
+			"local_path": "_5__infra",
+			"status":     "successful", "last_updated": now.Add(-3 * time.Hour),
+			"created": now.Add(-720 * time.Hour),
+			"summary_fields": map[string]any{
+				"organization": map[string]any{"name": "Default"},
+				"credential":   map[string]any{"id": 4, "name": "infra.git", "kind": "scm"},
+			},
+		}, map[string]any{
+			// A manual project: no SCM type, never updated. Its details view
+			// must not claim a branch or a revision it does not have.
+			"id": 6, "name": "legacy", "status": "",
+			"summary_fields": map[string]any{"organization": map[string]any{"name": "Default"}},
+		}})...))
+	})
+	// Real AWX answers a bare JSON array here, not a page. The list is long
+	// enough that the details view has to scroll.
+	mux.HandleFunc("/api/v2/projects/5/playbooks/", func(w http.ResponseWriter, r *http.Request) {
+		names := make([]string, 0, 40)
+		for i := 1; i <= 40; i++ {
+			names = append(names, fmt.Sprintf("plays/site-%02d.yml", i))
+		}
+		write(w, names)
+	})
+	mux.HandleFunc("/api/v2/projects/6/playbooks/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, []string{})
 	})
 	mk.Server = httptest.NewServer(mux)
 	t.Cleanup(mk.Close)
@@ -578,7 +607,7 @@ func TestEveryViewRendersWithinTerminalBounds(t *testing.T) {
 		m := New(awx.New(srv.URL, "test-token", false))
 		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = step(t, m, m.connect())
-		for _, k := range []string{"1", "2", "3", "4", "?"} {
+		for _, k := range []string{"1", "2", "3", "4", "?", "4", "enter", "G"} {
 			m = step(t, m, key(k))
 			out := m.View()
 			for i, line := range strings.Split(out, "\n") {
