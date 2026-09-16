@@ -221,9 +221,9 @@ whatever the view is narrowed to.
 
 The key line marks what is already in force: `p` reads **unpin** on a pinned
 row, `f` **show** on a narrowed list, and in the output view `f` **follow**
-while the tail is being followed — each in the accent colour rather than the
-muted one, so the state of the view can be read off the legend that is always
-on screen.
+while the tail is being followed — each in amber, the same colour as the `★`
+on the rows, so the state of the view can be read off the legend that is
+always on screen.
 
 Two details follow from where the data comes from:
 
