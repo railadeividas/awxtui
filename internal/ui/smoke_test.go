@@ -173,11 +173,28 @@ func mockAWX(t *testing.T) *mock {
 			"ask_verbosity_on_launch":      id == 7,
 			"ask_timeout_on_launch":        id == 7,
 			"ask_diff_mode_on_launch":      id == 7,
+			// The catalogue prompts: the template picks from a list of ids.
+			"ask_credential_on_launch":            id == 7,
+			"ask_execution_environment_on_launch": id == 7,
+			"ask_instance_groups_on_launch":       id == 7,
+			"ask_labels_on_launch":                id == 7,
 			"defaults": map[string]any{
 				"limit": "", "job_tags": "", "skip_tags": "", "scm_branch": "",
 				"extra_vars": "{}", "job_type": "run", "verbosity": 0,
 				"diff_mode": false, "timeout": 0, "forks": 5,
 				"inventory": map[string]any{"id": 3, "name": "production"},
+				// Real AWX lists the template's own credentials and image
+				// here, and an empty list when no instance group is pinned.
+				"credentials": []any{
+					map[string]any{"id": 39, "name": "web_prod.ssh", "credential_type": 1, "passwords_needed": []string{}},
+					// Credential 99 is deliberately absent from the
+					// catalogue below, the way a credential past the page cap
+					// would be: it must still be kept, not silently dropped.
+					map[string]any{"id": 99, "name": "vault.approle", "credential_type": 31, "passwords_needed": []string{}},
+				},
+				"execution_environment": map[string]any{"id": 14, "name": "ansible-web"},
+				"labels":                []any{map[string]any{"id": 1, "name": "nightly"}},
+				"instance_groups":       []any{},
 			},
 		}
 	}
@@ -218,6 +235,38 @@ func mockAWX(t *testing.T) *mock {
 			map[string]any{"type": "textarea", "variable": "notes", "question_name": "Notes",
 				"required": false, "default": ""},
 		}})
+	})
+	// Credentials arrive over two pages, so the form only holds the whole
+	// catalogue if the client actually follows `next`.
+	mux.HandleFunc("/api/v2/credentials/", func(w http.ResponseWriter, r *http.Request) {
+		cred := func(id int, name, kind string) any {
+			return map[string]any{"id": id, "name": name, "kind": kind,
+				"summary_fields": map[string]any{"credential_type": map[string]any{"name": kind}}}
+		}
+		if r.URL.Query().Get("page") == "2" {
+			write(w, map[string]any{"count": 3, "results": []any{cred(41, "galaxy.token", "Ansible Galaxy")}})
+			return
+		}
+		write(w, map[string]any{"count": 3, "next": "/api/v2/credentials/?page=2&page_size=200",
+			"results": []any{cred(39, "web_prod.ssh", "Machine"), cred(40, "db_prod.ssh", "Machine")}})
+	})
+	mux.HandleFunc("/api/v2/execution_environments/", func(w http.ResponseWriter, r *http.Request) {
+		write(w,
+			page(map[string]any{"id": 14, "name": "ansible-web", "image": "registry/ansible-web:1"},
+				map[string]any{"id": 15, "name": "ansible-db", "image": "registry/ansible-db:1"}))
+	})
+	mux.HandleFunc("/api/v2/instance_groups/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, page(
+			map[string]any{"id": 2, "name": "default"},
+			map[string]any{"id": 12, "name": "tower-srv"},
+			map[string]any{"id": 13, "name": "tower-k8s", "is_container_group": true},
+		))
+	})
+	mux.HandleFunc("/api/v2/labels/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, page(
+			map[string]any{"id": 1, "name": "nightly"},
+			map[string]any{"id": 2, "name": "hotfix"},
+		))
 	})
 	mux.HandleFunc("/api/v2/inventories/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, page(map[string]any{

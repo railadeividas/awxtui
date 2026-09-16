@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -33,7 +35,8 @@ func TestLaunchFormPrompts(t *testing.T) {
 	srv := mockAWX(t)
 	m := openTemplateForm(t, srv, "Deploy web app")
 
-	want := []string{"inventory", "job_type", "limit", "verbosity", "job_tags", "diff_mode", "timeout", "extra_vars"}
+	want := []string{"inventory", "credentials", "execution_environment", "instance_groups", "labels",
+		"job_type", "limit", "verbosity", "job_tags", "diff_mode", "timeout", "extra_vars"}
 	if got := formKeys(&m); !equalStrings(got, want) {
 		t.Fatalf("form fields = %v, want %v", got, want)
 	}
@@ -81,6 +84,193 @@ func TestLaunchFormPrompts(t *testing.T) {
 	// extra_vars was left empty, so it must not be sent at all.
 	if _, ok := p["extra_vars"]; ok {
 		t.Errorf("empty extra_vars should be omitted, got %#v", p["extra_vars"])
+	}
+}
+
+// The catalogue prompts — credentials, execution environment, instance groups
+// and labels — offer the instance's records, pre-select the template's own
+// values, and send ids.
+func TestLaunchCataloguePrompts(t *testing.T) {
+	srv := mockAWX(t)
+	m := openTemplateForm(t, srv, "Deploy web app")
+
+	// Credentials span two pages, and credential 99 is not in the catalogue
+	// at all; all four must be offered.
+	creds := fieldByKey(t, &m, "credentials")
+	if creds.kind != fMultiChoice {
+		t.Fatalf("credentials kind = %v, want multi-select", creds.kind)
+	}
+	wantChoices := []string{"web_prod.ssh (Machine)", "db_prod.ssh (Machine)", "galaxy.token (Ansible Galaxy)", "vault.approle"}
+	if !equalStrings(creds.choices, wantChoices) {
+		t.Errorf("credential choices = %v, want %v", creds.choices, wantChoices)
+	}
+	if want := []string{"web_prod.ssh (Machine)", "vault.approle"}; !equalStrings(creds.selections(), want) {
+		t.Errorf("pre-selected credentials = %v, want %v", creds.selections(), want)
+	}
+	if groups := fieldByKey(t, &m, "instance_groups"); !equalStrings(groups.choices, []string{"default", "tower-srv", "tower-k8s (container)"}) {
+		t.Errorf("instance group choices = %v", groups.choices)
+	} else if len(groups.selections()) != 0 {
+		t.Errorf("the template pins no instance group, got %v", groups.selections())
+	}
+	if labels := fieldByKey(t, &m, "labels"); !equalStrings(labels.selections(), []string{"nightly"}) {
+		t.Errorf("pre-selected labels = %v, want [nightly]", labels.selections())
+	}
+	// The execution environment is a single choice whose first entry keeps
+	// the template's own image.
+	ee := fieldByKey(t, &m, "execution_environment")
+	if !equalStrings(ee.choices, []string{"template default", "ansible-web", "ansible-db"}) {
+		t.Errorf("execution environment choices = %v", ee.choices)
+	}
+	if ee.value() != "14" {
+		t.Errorf("execution environment should default to the template's image 14, got %q", ee.value())
+	}
+	show(t, "launch form with catalogue prompts", m.View())
+
+	// Pin tower-srv, swap the label, leave credentials and the image alone.
+	m = focusField(t, m, "instance_groups")
+	m = step(t, m, key("right"))
+	m = step(t, m, key(" "))
+	m = focusField(t, m, "labels")
+	m = step(t, m, key(" ")) // nightly off
+	m = step(t, m, key("right"))
+	m = step(t, m, key(" ")) // hotfix on
+	show(t, "instance group selected", m.View())
+	m = step(t, m, key("ctrl+s"))
+	if m.err != nil {
+		t.Fatalf("launch errored: %v", m.err)
+	}
+
+	p := srv.lastLaunch()
+	if p == nil {
+		t.Fatal("nothing was launched")
+	}
+	for _, c := range []struct {
+		key  string
+		want []float64
+	}{
+		{"instance_groups", []float64{12}},
+		{"labels", []float64{2}},
+		{"credentials", []float64{39, 99}},
+	} {
+		got, ok := p[c.key].([]any)
+		if !ok {
+			t.Errorf("%s = %#v, want a list of ids", c.key, p[c.key])
+			continue
+		}
+		if len(got) != len(c.want) {
+			t.Errorf("%s = %#v, want %v", c.key, got, c.want)
+			continue
+		}
+		for i, want := range c.want {
+			if n, ok := got[i].(float64); !ok || n != want {
+				t.Errorf("%s[%d] = %#v, want number %v", c.key, i, got[i], want)
+			}
+		}
+	}
+	if v, ok := p["execution_environment"].(float64); !ok || v != 14 {
+		t.Errorf("execution_environment = %#v, want number 14", p["execution_environment"])
+	}
+}
+
+// Choosing "template default" must leave execution_environment out of the
+// payload: AWX rejects a null id, and an absent key means "keep the image".
+func TestLaunchKeepsTemplateExecutionEnvironment(t *testing.T) {
+	srv := mockAWX(t)
+	m := openTemplateForm(t, srv, "Deploy web app")
+	m = focusField(t, m, "execution_environment")
+	m = step(t, m, key("left")) // ansible-web -> template default
+	if v := fieldByKey(t, &m, "execution_environment").value(); v != "" {
+		t.Fatalf("expected the template default to be selected, got %q", v)
+	}
+	m = step(t, m, key("ctrl+s"))
+	if m.err != nil {
+		t.Fatalf("launch errored: %v", m.err)
+	}
+	if v, ok := srv.lastLaunch()["execution_environment"]; ok {
+		t.Errorf("execution_environment should have been omitted, got %#v", v)
+	}
+}
+
+// hiddenCount matches the "41›" a windowed multi-select adds when entries
+// are scrolled out of view.
+var hiddenCount = regexp.MustCompile(`[0-9]›`)
+
+// A real catalogue is far bigger than the screen: 19 instance groups and 52
+// credentials on the instance this was built against, with names long enough
+// that three of them fill a line. The field has to window them rather than
+// render the list inline.
+func TestLaunchFormFitsWithALargeCatalogue(t *testing.T) {
+	srv := mockAWX(t)
+	base := openTemplateForm(t, srv, "Deploy web app")
+	groups := make([]awx.InstanceGroup, 60)
+	for i := range groups {
+		groups[i] = awx.InstanceGroup{ID: i + 1, Name: fmt.Sprintf("tower-region-%02d-executors", i)}
+	}
+	msg := launchFormMsg{
+		gen: base.gen, template: base.form.template, config: base.form.config,
+		inventories: []awx.Inventory{{ID: 3, Name: "production"}}, instanceGroups: groups,
+	}
+
+	for _, size := range [][2]int{{80, 24}, {120, 40}, {200, 50}} {
+		m := New(awx.New(srv.URL, "test-token", false))
+		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m = step(t, m, m.connect())
+		m = step(t, m, msg)
+		if m.mode != modeLaunch {
+			t.Fatalf("expected the launch form, got mode %v", m.mode)
+		}
+		windowed := false
+		// Walk every field: each one is rendered differently when focused.
+		for i := 0; i < len(m.form.fields); i++ {
+			m = step(t, m, key("down"))
+			out := m.View()
+			if m.form.fields[m.form.cursor].key == "instance_groups" {
+				plain := stripANSI(out)
+				boxes := strings.Count(plain, "[ ]") + strings.Count(plain, "[x]")
+				// A window shows a handful of entries and says how many are
+				// hidden ("‹12 … 41›"), so the digit-arrow pair is the tell.
+				windowed = boxes < len(groups) && hiddenCount.MatchString(plain)
+			}
+			for n, line := range strings.Split(out, "\n") {
+				if w := lineWidth(line); w > size[0] {
+					t.Errorf("%dx%d field %q: line %d is %d cols wide",
+						size[0], size[1], m.form.fields[m.form.cursor].key, n, w)
+				}
+			}
+			if lines := strings.Count(out, "\n") + 1; lines > size[1] {
+				t.Errorf("%dx%d field %q: view is %d lines, terminal has %d",
+					size[0], size[1], m.form.fields[m.form.cursor].key, lines, size[1])
+			}
+		}
+		if !windowed {
+			t.Errorf("%dx%d: 60 instance groups should render as a window with a hidden count", size[0], size[1])
+		}
+	}
+	show(t, "60 instance groups at 80 columns", func() string {
+		m := New(awx.New(srv.URL, "test-token", false))
+		m = step(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+		m = step(t, m, m.connect())
+		m = step(t, m, msg)
+		m = focusField(t, m, "instance_groups")
+		return m.View()
+	}())
+}
+
+// Without a catalogue there is nothing to choose from, and offering an empty
+// multi-select would submit "none" — dropping the template's own credentials.
+func TestIDListFieldSkipsEmptyCatalogue(t *testing.T) {
+	if _, ok := idListField("credentials", "Credentials", nil, nil); ok {
+		t.Error("an empty catalogue with no defaults should produce no field")
+	}
+	fl, ok := idListField("credentials", "Credentials", nil, []awx.NamedRef{{ID: 7, Name: "vault"}})
+	if !ok {
+		t.Fatal("a template default must survive an unavailable catalogue")
+	}
+	if !equalStrings(fl.choices, []string{"vault"}) || !equalStrings(fl.selections(), []string{"vault"}) {
+		t.Errorf("choices = %v, selected = %v, want the default pre-selected", fl.choices, fl.selections())
+	}
+	if ids := fl.selectedIDs(); len(ids) != 1 || ids[0] != 7 {
+		t.Errorf("selectedIDs = %v, want [7]", ids)
 	}
 }
 

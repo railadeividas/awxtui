@@ -187,6 +187,54 @@ func TestLiveLaunchForm(t *testing.T) {
 		tpl.Name, tpl.ID, m.form.config.SurveyEnabled, formKeys(&m))
 	show(t, "live launch form: "+tpl.Name, m.View())
 
+	// Every prompt the template asks for must have become a field. This is the
+	// check that was missing: ansible-dns_dnstools_main sets
+	// ask_instance_groups_on_launch, and the form used to ignore it, so the
+	// job silently ran on the template's own instance groups.
+	cfg := m.form.config
+	for _, p := range []struct {
+		asked bool
+		key   string
+	}{
+		{cfg.AskInventory, "inventory"},
+		{cfg.AskCredentials, "credentials"},
+		{cfg.AskExecutionEnvironment, "execution_environment"},
+		{cfg.AskInstanceGroups, "instance_groups"},
+		{cfg.AskLabels, "labels"},
+		{cfg.AskJobType, "job_type"},
+		{cfg.AskSCMBranch, "scm_branch"},
+		{cfg.AskLimit, "limit"},
+		{cfg.AskVerbosity, "verbosity"},
+		{cfg.AskTags, "job_tags"},
+		{cfg.AskSkipTags, "skip_tags"},
+		{cfg.AskDiffMode, "diff_mode"},
+		{cfg.AskForks, "forks"},
+		{cfg.AskJobSliceCount, "job_slice_count"},
+		{cfg.AskTimeout, "timeout"},
+		{cfg.AskVariables, "extra_vars"},
+	} {
+		if !p.asked {
+			continue
+		}
+		var fl *formField
+		for i := range m.form.fields {
+			if m.form.fields[i].key == p.key {
+				fl = &m.form.fields[i]
+			}
+		}
+		if fl == nil {
+			t.Errorf("template prompts for %s but the form has no such field (%v)", p.key, formKeys(&m))
+			continue
+		}
+		switch fl.kind {
+		case fMultiChoice:
+			t.Logf("  %s: %d choices, pre-selected %v (ids %v)",
+				p.key, len(fl.choices), fl.selections(), fl.selectedIDs())
+		case fChoice:
+			t.Logf("  %s: %d choices, value %q", p.key, len(fl.choices), fl.value())
+		}
+	}
+
 	// Submitting must be refused by the read-only client.
 	m = step(t, m, key("ctrl+s"))
 	if m.form.problem != "" && !strings.Contains(m.form.problem, "read-only") {

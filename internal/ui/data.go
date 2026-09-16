@@ -71,11 +71,15 @@ type (
 	}
 	// launchFormMsg carries everything needed to build the launch form.
 	launchFormMsg struct {
-		gen         int
-		template    awx.JobTemplate
-		config      awx.LaunchConfig
-		survey      awx.SurveySpec
-		inventories []awx.Inventory
+		gen            int
+		template       awx.JobTemplate
+		config         awx.LaunchConfig
+		survey         awx.SurveySpec
+		inventories    []awx.Inventory
+		credentials    []awx.Credential
+		environments   []awx.ExecutionEnvironment
+		instanceGroups []awx.InstanceGroup
+		labels         []awx.Label
 	}
 	canceledMsg struct {
 		id  int
@@ -268,6 +272,21 @@ func (m Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 		if cfg.AskInventory {
 			// Best effort: the form falls back to typing an id.
 			msg.inventories, _ = c.AllInventories(ctx, maxPages)
+		}
+		// The pick-from-a-list prompts each need their own catalogue. All are
+		// best effort: without a list the form omits the prompt and AWX uses
+		// the template's own value, which is what happens today anyway.
+		if cfg.AskCredentials {
+			msg.credentials, _ = c.AllCredentials(ctx, maxPages)
+		}
+		if cfg.AskExecutionEnvironment {
+			msg.environments, _ = c.AllExecutionEnvironments(ctx, maxPages)
+		}
+		if cfg.AskInstanceGroups {
+			msg.instanceGroups, _ = c.AllInstanceGroups(ctx, maxPages)
+		}
+		if cfg.AskLabels {
+			msg.labels, _ = c.AllLabels(ctx, maxPages)
 		}
 		return msg
 	}

@@ -352,13 +352,14 @@ func (c *Client) Inventories(ctx context.Context, pageURL, search string) (Page[
 	return listPage[Inventory](ctx, c, firstOr(pageURL, listURL("/api/v2/inventories/", "name", PageSize, search)))
 }
 
-// AllInventories walks every page of inventories, up to maxPages, for callers
-// that need a complete list rather than a screenful.
-func (c *Client) AllInventories(ctx context.Context, maxPages int) ([]Inventory, error) {
-	var out []Inventory
+// allPages walks a paged endpoint to its end, up to maxPages, for callers that
+// need a complete list rather than a screenful. Partial results are returned
+// alongside an error so a failure on page three still yields pages one and two.
+func allPages[T any](ctx context.Context, maxPages int, page func(context.Context, string, string) (Page[T], error)) ([]T, error) {
+	var out []T
 	next := ""
 	for i := 0; i < maxPages; i++ {
-		p, err := c.Inventories(ctx, next, "")
+		p, err := page(ctx, next, "")
 		if err != nil {
 			return out, err
 		}
@@ -369,6 +370,97 @@ func (c *Client) AllInventories(ctx context.Context, maxPages int) ([]Inventory,
 		next = p.Next
 	}
 	return out, nil
+}
+
+// AllInventories walks every page of inventories.
+func (c *Client) AllInventories(ctx context.Context, maxPages int) ([]Inventory, error) {
+	return allPages(ctx, maxPages, c.Inventories)
+}
+
+// InstanceGroup is a pool of execution nodes a job can be pinned to.
+type InstanceGroup struct {
+	ID               int    `json:"id"`
+	Name             string `json:"name"`
+	IsContainerGroup bool   `json:"is_container_group"`
+}
+
+// InstanceGroups returns a page of instance groups.
+func (c *Client) InstanceGroups(ctx context.Context, pageURL, search string) (Page[InstanceGroup], error) {
+	return listPage[InstanceGroup](ctx, c, firstOr(pageURL, listURL("/api/v2/instance_groups/", "name", PageSize, search)))
+}
+
+// AllInstanceGroups walks every page of instance groups.
+func (c *Client) AllInstanceGroups(ctx context.Context, maxPages int) ([]InstanceGroup, error) {
+	return allPages(ctx, maxPages, c.InstanceGroups)
+}
+
+// Label is a free-form tag attached to a job.
+type Label struct {
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	SummaryFields struct {
+		Organization struct {
+			Name string `json:"name"`
+		} `json:"organization"`
+	} `json:"summary_fields"`
+}
+
+// Labels returns a page of labels.
+func (c *Client) Labels(ctx context.Context, pageURL, search string) (Page[Label], error) {
+	return listPage[Label](ctx, c, firstOr(pageURL, listURL("/api/v2/labels/", "name", PageSize, search)))
+}
+
+// AllLabels walks every page of labels.
+func (c *Client) AllLabels(ctx context.Context, maxPages int) ([]Label, error) {
+	return allPages(ctx, maxPages, c.Labels)
+}
+
+// ExecutionEnvironment is the container image a job runs inside.
+type ExecutionEnvironment struct {
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Image string `json:"image"`
+}
+
+// ExecutionEnvironments returns a page of execution environments.
+func (c *Client) ExecutionEnvironments(ctx context.Context, pageURL, search string) (Page[ExecutionEnvironment], error) {
+	return listPage[ExecutionEnvironment](ctx, c, firstOr(pageURL, listURL("/api/v2/execution_environments/", "name", PageSize, search)))
+}
+
+// AllExecutionEnvironments walks every page of execution environments.
+func (c *Client) AllExecutionEnvironments(ctx context.Context, maxPages int) ([]ExecutionEnvironment, error) {
+	return allPages(ctx, maxPages, c.ExecutionEnvironments)
+}
+
+// Credential is a machine, vault or cloud credential a job can use.
+type Credential struct {
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	SummaryFields struct {
+		CredentialType struct {
+			Name string `json:"name"`
+		} `json:"credential_type"`
+	} `json:"summary_fields"`
+}
+
+// TypeName is the credential's type for display, preferring the human name
+// AWX puts in summary_fields over the terse kind.
+func (c Credential) TypeName() string {
+	if n := strings.TrimSpace(c.SummaryFields.CredentialType.Name); n != "" {
+		return n
+	}
+	return c.Kind
+}
+
+// Credentials returns a page of credentials.
+func (c *Client) Credentials(ctx context.Context, pageURL, search string) (Page[Credential], error) {
+	return listPage[Credential](ctx, c, firstOr(pageURL, listURL("/api/v2/credentials/", "name", PageSize, search)))
+}
+
+// AllCredentials walks every page of credentials.
+func (c *Client) AllCredentials(ctx context.Context, maxPages int) ([]Credential, error) {
+	return allPages(ctx, maxPages, c.Credentials)
 }
 
 // Project is a source of playbooks.

@@ -117,6 +117,12 @@ tmux send-keys -t awx i; tmux capture-pane -p -t awx
 
 ## Still open
 
-Workflow job templates, schedules, ad-hoc commands, and launch prompts for
-instance groups, labels, execution environments and credentials (those fall
-back to template defaults today). See the "Not done yet" section of README.md.
+Workflow job templates, schedules and ad-hoc commands. See the "Not done yet"
+section of README.md.
+
+Every `ask_*_on_launch` flag AWX exposes now has a field. A new one must be
+added in three places at once — the flag on `awx.LaunchConfig`, the field in
+`newForm`, and its key in the payload switch — because an undeclared flag is
+dropped silently at JSON decode, which is how the instance-groups prompt went
+missing for so long. `TestLiveLaunchForm` asserts the mapping against a real
+template.

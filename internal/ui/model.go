@@ -521,7 +521,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.notice = ""
-		m.form = newForm(msg.template, msg.config, msg.survey, msg.inventories, m.width)
+		m.form = newForm(msg, m.width)
 		m.mode = modeLaunch
 		return m, textinput.Blink
 

@@ -21,43 +21,81 @@ type LaunchConfig struct {
 	InventoryNeededToStart   bool     `json:"inventory_needed_to_start"`
 	CredentialNeededToStart  bool     `json:"credential_needed_to_start"`
 
-	AskInventory     bool `json:"ask_inventory_on_launch"`
-	AskLimit         bool `json:"ask_limit_on_launch"`
-	AskTags          bool `json:"ask_tags_on_launch"`
-	AskSkipTags      bool `json:"ask_skip_tags_on_launch"`
-	AskVariables     bool `json:"ask_variables_on_launch"`
-	AskJobType       bool `json:"ask_job_type_on_launch"`
-	AskVerbosity     bool `json:"ask_verbosity_on_launch"`
-	AskSCMBranch     bool `json:"ask_scm_branch_on_launch"`
-	AskDiffMode      bool `json:"ask_diff_mode_on_launch"`
-	AskTimeout       bool `json:"ask_timeout_on_launch"`
-	AskForks         bool `json:"ask_forks_on_launch"`
-	AskJobSliceCount bool `json:"ask_job_slice_count_on_launch"`
+	AskInventory            bool `json:"ask_inventory_on_launch"`
+	AskLimit                bool `json:"ask_limit_on_launch"`
+	AskTags                 bool `json:"ask_tags_on_launch"`
+	AskSkipTags             bool `json:"ask_skip_tags_on_launch"`
+	AskVariables            bool `json:"ask_variables_on_launch"`
+	AskJobType              bool `json:"ask_job_type_on_launch"`
+	AskVerbosity            bool `json:"ask_verbosity_on_launch"`
+	AskSCMBranch            bool `json:"ask_scm_branch_on_launch"`
+	AskDiffMode             bool `json:"ask_diff_mode_on_launch"`
+	AskTimeout              bool `json:"ask_timeout_on_launch"`
+	AskForks                bool `json:"ask_forks_on_launch"`
+	AskJobSliceCount        bool `json:"ask_job_slice_count_on_launch"`
+	AskCredentials          bool `json:"ask_credential_on_launch"`
+	AskExecutionEnvironment bool `json:"ask_execution_environment_on_launch"`
+	AskLabels               bool `json:"ask_labels_on_launch"`
+	AskInstanceGroups       bool `json:"ask_instance_groups_on_launch"`
 
 	Defaults LaunchDefaults `json:"defaults"`
 }
 
+// NamedRef is an {id, name} reference to another record. AWX is inconsistent
+// about these inside the launch defaults: some builds send the object, others
+// send the bare id, and an unset reference is null — so accept all three.
+type NamedRef struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+func (r *NamedRef) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		return nil
+	}
+	if id, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+		r.ID = id
+		return nil
+	}
+	var obj struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return err
+	}
+	r.ID, r.Name = obj.ID, obj.Name
+	return nil
+}
+
 // LaunchDefaults are the values AWX will use for anything left untouched.
 type LaunchDefaults struct {
-	Limit         string `json:"limit"`
-	SCMBranch     string `json:"scm_branch"`
-	JobTags       string `json:"job_tags"`
-	SkipTags      string `json:"skip_tags"`
-	ExtraVars     string `json:"extra_vars"`
-	JobType       string `json:"job_type"`
-	Verbosity     int    `json:"verbosity"`
-	DiffMode      bool   `json:"diff_mode"`
-	Timeout       int    `json:"timeout"`
-	Forks         int    `json:"forks"`
-	JobSliceCount int    `json:"job_slice_count"`
-	Inventory     struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	} `json:"inventory"`
-	Credentials []struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	} `json:"credentials"`
+	Limit                string     `json:"limit"`
+	SCMBranch            string     `json:"scm_branch"`
+	JobTags              string     `json:"job_tags"`
+	SkipTags             string     `json:"skip_tags"`
+	ExtraVars            string     `json:"extra_vars"`
+	JobType              string     `json:"job_type"`
+	Verbosity            int        `json:"verbosity"`
+	DiffMode             bool       `json:"diff_mode"`
+	Timeout              int        `json:"timeout"`
+	Forks                int        `json:"forks"`
+	JobSliceCount        int        `json:"job_slice_count"`
+	Inventory            NamedRef   `json:"inventory"`
+	Credentials          []NamedRef `json:"credentials"`
+	ExecutionEnvironment NamedRef   `json:"execution_environment"`
+	Labels               []NamedRef `json:"labels"`
+	InstanceGroups       []NamedRef `json:"instance_groups"`
+}
+
+// IDs pulls the ids out of a reference list, for pre-selecting the template's
+// own values in the launch form.
+func IDs(refs []NamedRef) []int {
+	out := make([]int, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, r.ID)
+	}
+	return out
 }
 
 func (c *Client) LaunchConfig(ctx context.Context, templateID int) (LaunchConfig, error) {

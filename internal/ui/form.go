@@ -94,6 +94,22 @@ func (f *formField) selections() []string {
 	return out
 }
 
+// selectedIDs returns the payload values of a multi-select as numbers, for the
+// id catalogues (credentials, instance groups, labels). Order follows the
+// catalogue, which is the order AWX will apply them in.
+func (f *formField) selectedIDs() []int {
+	out := []int{}
+	for i, on := range f.chosen {
+		if !on || i >= len(f.values) {
+			continue
+		}
+		if n, err := strconv.Atoi(f.values[i]); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func (f *formField) focus() tea.Cmd {
 	switch f.kind {
 	case fTextarea:
@@ -142,9 +158,52 @@ func newInput(value, placeholder string, width int) textinput.Model {
 	return ti
 }
 
+// idChoice is one entry of a pick-many-by-id catalogue: credentials, instance
+// groups or labels.
+type idChoice struct {
+	id    int
+	label string
+}
+
+// idListField builds the multi-select for one of those catalogues, with the
+// template's own values pre-selected. It reports ok=false when there is
+// nothing to choose from, so the caller can leave the prompt out entirely
+// rather than offer an empty list that would submit "none".
+//
+// A default that is missing from the catalogue is appended rather than
+// dropped: the catalogue is capped at maxPages, and silently deselecting a
+// credential the template needs would launch a job that cannot authenticate.
+func idListField(key, label string, items []idChoice, defaults []awx.NamedRef) (formField, bool) {
+	fl := formField{key: key, label: label, kind: fMultiChoice}
+	byID := make(map[int]bool, len(items))
+	for _, it := range items {
+		byID[it.id] = true
+	}
+	for _, def := range defaults {
+		if !byID[def.ID] {
+			byID[def.ID] = true
+			items = append(items, idChoice{id: def.ID, label: firstNonEmpty(def.Name, fmt.Sprintf("id %d", def.ID))})
+		}
+	}
+	if len(items) == 0 {
+		return fl, false
+	}
+	selected := make(map[int]bool, len(defaults))
+	for _, id := range awx.IDs(defaults) {
+		selected[id] = true
+	}
+	for _, it := range items {
+		fl.choices = append(fl.choices, it.label)
+		fl.values = append(fl.values, strconv.Itoa(it.id))
+		fl.chosen = append(fl.chosen, selected[it.id])
+	}
+	return fl, true
+}
+
 // newForm builds the fields a template needs: the ask_*_on_launch prompts, the
 // survey questions, and any credential passwords.
-func newForm(t awx.JobTemplate, cfg awx.LaunchConfig, spec awx.SurveySpec, inventories []awx.Inventory, width int) form {
+func newForm(src launchFormMsg, width int) form {
+	t, cfg, spec, inventories := src.template, src.config, src.survey, src.inventories
 	f := form{template: t, config: cfg, survey: spec, width: width}
 	d := cfg.Defaults
 	inputWidth := min(max(width-34, 16), 60)
@@ -180,6 +239,61 @@ func newForm(t awx.JobTemplate, cfg awx.LaunchConfig, spec awx.SurveySpec, inven
 			}
 		}
 		add(fl)
+	}
+	if cfg.AskCredentials {
+		items := make([]idChoice, 0, len(src.credentials))
+		for _, c := range src.credentials {
+			label := c.Name
+			if ty := c.TypeName(); ty != "" {
+				label += " (" + ty + ")"
+			}
+			items = append(items, idChoice{id: c.ID, label: label})
+		}
+		if fl, ok := idListField("credentials", "Credentials", items, d.Credentials); ok {
+			// credential_needed_to_start means the job cannot run with none.
+			fl.required = cfg.CredentialNeededToStart
+			add(fl)
+		}
+	}
+	if cfg.AskExecutionEnvironment && len(src.environments) > 0 {
+		fl := formField{key: "execution_environment", label: "Execution env", kind: fChoice,
+			// The first entry keeps the template's own image: AWX takes an id
+			// here, so "no answer" has to be a real, unsendable choice.
+			choices: []string{"template default"}, values: []string{""}}
+		for _, ee := range src.environments {
+			fl.choices = append(fl.choices, ee.Name)
+			fl.values = append(fl.values, strconv.Itoa(ee.ID))
+		}
+		if def := d.ExecutionEnvironment.ID; def != 0 {
+			for i, v := range fl.values {
+				if v == strconv.Itoa(def) {
+					fl.idx = i
+				}
+			}
+		}
+		add(fl)
+	}
+	if cfg.AskInstanceGroups {
+		items := make([]idChoice, 0, len(src.instanceGroups))
+		for _, g := range src.instanceGroups {
+			label := g.Name
+			if g.IsContainerGroup {
+				label += " (container)"
+			}
+			items = append(items, idChoice{id: g.ID, label: label})
+		}
+		if fl, ok := idListField("instance_groups", "Instance groups", items, d.InstanceGroups); ok {
+			add(fl)
+		}
+	}
+	if cfg.AskLabels {
+		items := make([]idChoice, 0, len(src.labels))
+		for _, l := range src.labels {
+			items = append(items, idChoice{id: l.ID, label: l.Name})
+		}
+		if fl, ok := idListField("labels", "Labels", items, d.Labels); ok {
+			add(fl)
+		}
 	}
 	if cfg.AskJobType {
 		fl := formField{key: "job_type", label: "Job type", kind: fChoice,
@@ -489,6 +603,24 @@ func (f form) payload() (map[string]any, error) {
 			for k, val := range base {
 				vars[k] = val
 			}
+
+		case fl.kind == fMultiChoice:
+			// The only non-survey multi-selects are the id catalogues, and
+			// AWX wants those as a list of numbers. An empty list is sent
+			// deliberately: it is how the user drops the template's own
+			// credentials, labels or instance groups.
+			out[fl.key] = fl.selectedIDs()
+
+		case fl.key == "execution_environment":
+			// Empty means "keep the template's image": AWX rejects a null id.
+			if strings.TrimSpace(v) == "" {
+				continue
+			}
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", fl.label, err)
+			}
+			out[fl.key] = n
 
 		case fl.kind == fInt:
 			if strings.TrimSpace(v) == "" {

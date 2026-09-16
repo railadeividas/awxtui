@@ -107,9 +107,10 @@ NAME                     PROJECT      INVENTORY     LAST RUN       WHEN
 `enter` on a template reads `/launch/` and `/survey_spec/` and builds a form
 with exactly what that template asks for:
 
-- **Prompted values** — any `ask_*_on_launch` field: inventory (picked from a
-  list), job type, SCM branch, limit, verbosity, job and skip tags, diff mode,
-  forks, job slices, timeout, and extra vars as YAML or JSON.
+- **Prompted values** — every `ask_*_on_launch` field: inventory, credentials,
+  execution environment, instance groups and labels (each picked from the
+  instance's own list), job type, SCM branch, limit, verbosity, job and skip
+  tags, diff mode, forks, job slices, timeout, and extra vars as YAML or JSON.
 - **Survey questions** — text, textarea, password, integer, float,
   multiple choice and multiselect, with their defaults pre-filled and `required`
   answers enforced before anything is sent.
@@ -121,8 +122,14 @@ instead of coming back as an API error. Survey answers are merged into
 `extra_vars` with their declared types, and only the keys the template actually
 prompted for are sent.
 
-Instance groups, labels, execution environments and credential selection are not
-promptable yet — the template's defaults apply.
+Credentials, instance groups and labels are multi-selects (`←→` to move,
+`space` to toggle) holding the whole catalogue — 19 instance groups and 52
+credentials on the instance this was built against — so they render as a window
+with a count of what is scrolled out of view. The template's own values start
+selected, and one that is past the page cap is added to the list rather than
+quietly dropped: deselecting a credential a template needs would launch a job
+that cannot authenticate. The execution environment keeps a "template default"
+entry, which sends no key at all.
 
 Job output follows live while the job runs, and the Jobs list refreshes itself
 every few seconds.
@@ -225,4 +232,3 @@ the first page and merging it, so the pages you scrolled through stay put.
 ## Not done yet
 
 - Workflow job templates, schedules and ad-hoc commands.
-- Prompting for instance groups, labels, execution environments, credentials.

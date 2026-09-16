@@ -365,24 +365,9 @@ func (m Model) renderField(fl *formField, focused bool, labelW, inner int) strin
 		value = marker.Render("‹ ") + rowStyle.Render(choice) + marker.Render(" ›")
 
 	case fMultiChoice:
-		parts := []string{"  "}
-		for i, c := range fl.choices {
-			box := "[ ]"
-			if i < len(fl.chosen) && fl.chosen[i] {
-				box = "[x]"
-			}
-			item := box + " " + c
-			switch {
-			case focused && i == fl.idx:
-				item = helpKeyStyle.Render(item)
-			case fl.chosen[i]:
-				item = rowStyle.Render(item)
-			default:
-				item = dimStyle.Render(item)
-			}
-			parts = append(parts, item)
-		}
-		value = parts[0] + strings.Join(parts[1:], "  ")
+		// The modal is inner wide including its 2-column padding either side,
+		// and the line already spent a marker, the label and two gaps.
+		value = "  " + multiChoiceWindow(fl, focused, max(inner-4-labelW-5, 10))
 
 	case fTextarea:
 		if focused {
@@ -527,6 +512,92 @@ func (m Model) statusOrKeys(keys, right string) string {
 		right = dimStyle.Render("e for details  ") + right
 	}
 	return m.spread(cell(msg, max(0, m.width-lipgloss.Width(right)-1)), right)
+}
+
+// multiChoiceWindow renders a multi-select inside width columns. A focused
+// field shows checkboxes in a window around the highlighted entry, with a
+// count of what is hidden on either side; an unfocused one shows only what is
+// selected. The catalogue prompts run to dozens of entries — 19 instance
+// groups and 52 credentials on the instance this was built against — so the
+// whole list can never be rendered inline.
+// hiddenMarkerWidth is the room kept for "‹12 " and " 41›" together.
+const hiddenMarkerWidth = 10
+
+func multiChoiceWindow(fl *formField, focused bool, width int) string {
+	if len(fl.choices) == 0 {
+		return dimStyle.Render("(none available)")
+	}
+	if !focused {
+		sel := fl.selections()
+		if len(sel) == 0 {
+			return dimStyle.Render("(none selected)")
+		}
+		summary := strings.Join(sel, ", ")
+		if len(sel) < len(fl.choices) {
+			summary = fmt.Sprintf("%d of %d: %s", len(sel), len(fl.choices), summary)
+		}
+		return rowStyle.Render(truncateTo(summary, width))
+	}
+
+	item := func(i int) string {
+		box := "[ ]"
+		if i < len(fl.chosen) && fl.chosen[i] {
+			box = "[x]"
+		}
+		return box + " " + fl.choices[i]
+	}
+	// Grow outwards from the highlighted entry for as long as the next one
+	// fits. Widening first and then last keeps the window symmetric.
+	fit := func(budget int) (int, int) {
+		first, last := fl.idx, fl.idx
+		used := lipgloss.Width(item(fl.idx))
+		for first > 0 || last < len(fl.choices)-1 {
+			grew := false
+			if last < len(fl.choices)-1 {
+				if w := used + 2 + lipgloss.Width(item(last+1)); w <= budget {
+					last, used, grew = last+1, w, true
+				}
+			}
+			if first > 0 {
+				if w := used + 2 + lipgloss.Width(item(first-1)); w <= budget {
+					first, used, grew = first-1, w, true
+				}
+			}
+			if !grew {
+				return first, last
+			}
+		}
+		return first, last
+	}
+	first, last := fit(width)
+	if first > 0 || last < len(fl.choices)-1 {
+		// Some entries are hidden, so the "‹12 … 41›" counts need room of
+		// their own; without it they would be truncated straight back off.
+		first, last = fit(width - hiddenMarkerWidth)
+	}
+
+	parts := make([]string, 0, last-first+1)
+	for i := first; i <= last; i++ {
+		s := item(i)
+		switch {
+		case i == fl.idx:
+			s = helpKeyStyle.Render(s)
+		case i < len(fl.chosen) && fl.chosen[i]:
+			s = rowStyle.Render(s)
+		default:
+			s = dimStyle.Render(s)
+		}
+		parts = append(parts, s)
+	}
+	out := strings.Join(parts, "  ")
+	if first > 0 {
+		out = dimStyle.Render(fmt.Sprintf("‹%d ", first)) + out
+	}
+	if last < len(fl.choices)-1 {
+		out += dimStyle.Render(fmt.Sprintf(" %d›", len(fl.choices)-1-last))
+	}
+	// A single entry can still be wider than the window on a narrow terminal.
+	return truncateTo(out, width)
 }
 
 // truncateTo shortens s to w display cells, keeping its ANSI styling intact.
