@@ -35,6 +35,7 @@ const (
 	modeLaunch
 	modeHosts
 	modeHelp
+	modeError
 )
 
 const (
@@ -45,6 +46,10 @@ const (
 	// maxOutputRetries re-reads the output of a finished job that still looks
 	// empty, since AWX can lag behind the job finishing.
 	maxOutputRetries = 10
+	// maxOutputBytes bounds how much job output is kept in memory. A verbose
+	// play across thousands of hosts can run to hundreds of megabytes, and
+	// every poll re-wraps whatever is held.
+	maxOutputBytes = 2 << 20
 	// maxPages bounds how many pages of any list are pulled, so a huge
 	// instance cannot be walked forever.
 	maxPages = 25
@@ -493,7 +498,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputPages = 0
 		}
 		m.outputCounter = msg.counter
-		m.setOutput(text)
+		m.setOutput(trimOutput(text))
 		// Long jobs span many event pages; keep pulling until caught up.
 		if msg.more && m.mode == modeOutput && m.outputPages < maxOutputPages {
 			m.outputPages++
@@ -611,7 +616,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inflight++
 		return m, m.launch(id, payload)
 
-	case modeHelp:
+	case modeHelp, modeError:
 		m.mode = modeList
 		return m, nil
 
@@ -642,6 +647,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.mode = modeHelp
+		return m, nil
+	case "e":
+		if m.err != nil {
+			m.mode = modeError
+		}
 		return m, nil
 	case "up", "k":
 		return m, m.moveCursor(-1)
@@ -744,6 +754,21 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
+
+// trimOutput keeps the tail of very long output, so that memory and the cost
+// of re-wrapping stay bounded no matter how verbose a job is.
+func trimOutput(s string) string {
+	if len(s) <= maxOutputBytes {
+		return s
+	}
+	cut := len(s) - maxOutputBytes
+	if i := strings.IndexByte(s[cut:], '\n'); i >= 0 {
+		cut += i + 1
+	}
+	return outputTrimmedNotice + s[cut:]
+}
+
+const outputTrimmedNotice = "… earlier output trimmed; press r to reload from the start …\n"
 
 // mergeJobs folds a freshly fetched first page into an already-paged list:
 // existing entries are updated in place and genuinely new jobs are prepended.

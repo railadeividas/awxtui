@@ -46,6 +46,8 @@ func (m Model) View() string {
 		b.WriteString(m.pane(m.launchModal()))
 	case modeHelp:
 		b.WriteString(m.pane(m.helpModal()))
+	case modeError:
+		b.WriteString(m.pane(m.errorModal()))
 	case modeHosts:
 		b.WriteString(m.hostsBody())
 	default:
@@ -414,6 +416,25 @@ func (m Model) renderField(fl *formField, focused bool, labelW, inner int) strin
 	return line
 }
 
+// errorModal shows the whole error, which the one-line status bar has to cut.
+func (m Model) errorModal() string {
+	if m.err == nil {
+		return ""
+	}
+	width := min(m.width-8, 80)
+	var b strings.Builder
+	b.WriteString(errStyle.Bold(true).Render("Error"))
+	b.WriteString("\n\n")
+	lines := strings.Split(wrapANSI(m.err.Error(), width-6), "\n")
+	if cap := max(m.tableHeight()-8, 3); len(lines) > cap {
+		lines = append(lines[:cap], dimStyle.Render("… message truncated"))
+	}
+	b.WriteString(rowStyle.Render(strings.Join(lines, "\n")))
+	b.WriteString("\n\n")
+	b.WriteString(dimStyle.Render("press any key to close · r retries the current view"))
+	return modalStyle.BorderForeground(danger).Width(width).Render(b.String())
+}
+
 func (m Model) helpModal() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Keys"))
@@ -465,6 +486,8 @@ func (m Model) statusView() string {
 func (m Model) statusOrKeys(keys, right string) string {
 	switch {
 	case m.err != nil:
+		// The hint goes on the right so the error text cannot crowd it out.
+		right = dimStyle.Render("e for details  ") + right
 		msg := errStyle.Render("✗ " + oneLine(m.err.Error()))
 		return m.spread(cell(msg, max(0, m.width-lipgloss.Width(right)-1)), right)
 	case m.notice != "":

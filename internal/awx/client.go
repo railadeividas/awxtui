@@ -2,6 +2,7 @@
 package awx
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -75,18 +76,27 @@ func (c *Client) request(ctx context.Context, method, path string, body io.Reade
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, out any) error {
+	var payload []byte
+	if body != nil {
+		var err error
+		if payload, err = io.ReadAll(body); err != nil {
+			return err
+		}
+		body = bytes.NewReader(payload)
+	}
 	req, err := c.request(ctx, method, path, body)
 	if err != nil {
 		return err
 	}
-	res, err := c.http.Do(req)
+	res, err := c.send(req, payload)
 	if err != nil {
-		return err
+		return c.redactErr(err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 400 {
 		msg, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
-		return fmt.Errorf("%s %s: %s: %s", method, path, res.Status, strings.TrimSpace(string(msg)))
+		return c.redactErr(fmt.Errorf("%s %s: %s: %s",
+			method, path, res.Status, strings.TrimSpace(string(msg))))
 	}
 	if out == nil {
 		return nil
@@ -97,6 +107,93 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, ou
 		return err
 	}
 	return json.NewDecoder(res.Body).Decode(out)
+}
+
+const (
+	// maxAttempts includes the first try.
+	maxAttempts = 3
+	baseBackoff = 250 * time.Millisecond
+	maxBackoff  = 4 * time.Second
+)
+
+// send performs a request, retrying transient failures. GETs are safe to
+// repeat, so they are retried on network errors and 5xx as well; anything that
+// changes state is only retried on 429, which AWX returns before doing any
+// work. payload is the body to replay on a retry, if any.
+func (c *Client) send(req *http.Request, payload []byte) (*http.Response, error) {
+	for attempt := 1; ; attempt++ {
+		if payload != nil {
+			req.Body = io.NopCloser(bytes.NewReader(payload))
+		}
+		res, err := c.http.Do(req)
+
+		last := attempt >= maxAttempts
+		if !shouldRetry(req.Method, res, err) || last || req.Context().Err() != nil {
+			return res, err
+		}
+		wait := backoff(attempt, res)
+		if res != nil {
+			res.Body.Close()
+		}
+		select {
+		case <-time.After(wait):
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		}
+	}
+}
+
+// shouldRetry reports whether a failure is worth repeating. A POST that may
+// already have launched a job is never repeated on an ambiguous failure.
+func shouldRetry(method string, res *http.Response, err error) bool {
+	idempotent := method == http.MethodGet || method == http.MethodHead
+	if err != nil {
+		return idempotent
+	}
+	if res == nil {
+		return false
+	}
+	if res.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	return idempotent && res.StatusCode >= 500
+}
+
+// backoff grows the delay each attempt, honouring Retry-After when AWX sends
+// one (it does when rate limiting).
+func backoff(attempt int, res *http.Response) time.Duration {
+	if res != nil {
+		if v := res.Header.Get("Retry-After"); v != "" {
+			if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && secs >= 0 {
+				return min(time.Duration(secs)*time.Second, maxBackoff)
+			}
+			if when, err := http.ParseTime(strings.TrimSpace(v)); err == nil {
+				if d := time.Until(when); d > 0 {
+					return min(d, maxBackoff)
+				}
+			}
+		}
+	}
+	d := baseBackoff << (attempt - 1)
+	return min(d, maxBackoff)
+}
+
+// minRedactable is the shortest token worth substituting out of a message.
+// Replacing a one- or two-character string would corrupt the text it appears
+// in, and something that short is not a credential worth protecting anyway.
+const minRedactable = 8
+
+// redactErr keeps the token out of anything we might show or log, even though
+// it travels in a header rather than the URL.
+func (c *Client) redactErr(err error) error {
+	if err == nil || len(c.token) < minRedactable {
+		return err
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, c.token) {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(msg, c.token, "<token redacted>"))
 }
 
 // Page is one page of an AWX list endpoint. Next is the API-supplied path of
@@ -325,9 +422,9 @@ func (c *Client) Stdout(ctx context.Context, jobID int) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Accept", "text/plain")
-	res, err := c.http.Do(req)
+	res, err := c.send(req, nil)
 	if err != nil {
-		return "", err
+		return "", c.redactErr(err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusAccepted {
@@ -335,7 +432,8 @@ func (c *Client) Stdout(ctx context.Context, jobID int) (string, error) {
 	}
 	if res.StatusCode >= 400 {
 		msg, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
-		return "", fmt.Errorf("GET %s: %s: %s", path, res.Status, strings.TrimSpace(string(msg)))
+		return "", c.redactErr(fmt.Errorf("GET %s: %s: %s",
+			path, res.Status, strings.TrimSpace(string(msg))))
 	}
 	raw, err := io.ReadAll(res.Body)
 	return string(raw), err

@@ -197,7 +197,21 @@ Every list stops after 25 pages and says `(page limit)` rather than walking an
 instance forever. The Jobs list refreshes in the background by re-reading only
 the first page and merging it, so the pages you scrolled through stay put.
 
+## Behaviour under stress
+
+- **Transient failures are retried** with growing backoff, honouring
+  `Retry-After`. Only GETs are retried on network errors and 5xx; a launch is
+  retried solely on 429, which AWX returns before doing any work — repeating an
+  ambiguous POST could run a playbook twice.
+- **Tokens never reach an error message**, even if a server echoes one back.
+- **Very long output is trimmed to its tail** (2 MiB) on a line boundary, with
+  a note saying so, so a verbose play across thousands of hosts cannot grow
+  without bound or make every poll re-wrap hundreds of megabytes.
+- **Errors get a real view**: the status bar shows one line and `e` opens the
+  full text, itself marked as truncated if it still does not fit.
+
 ## Not done yet
 
+- Switching instance from inside the TUI (restart with `-instance` for now).
 - Workflow job templates, schedules and ad-hoc commands.
 - Prompting for instance groups, labels, execution environments, credentials.
