@@ -33,6 +33,11 @@ var (
 	helpKeyStyle  = lipgloss.NewStyle().Foreground(accent)
 	helpDescStyle = lipgloss.NewStyle().Foreground(muted)
 
+	// pinStyle marks a run kept on purpose; mineStyle marks one you started.
+	// Both have to stand out in a list where every other row is dim.
+	pinStyle  = lipgloss.NewStyle().Foreground(warn).Bold(true)
+	mineStyle = lipgloss.NewStyle().Foreground(accent)
+
 	errStyle  = lipgloss.NewStyle().Foreground(danger)
 	okStyle   = lipgloss.NewStyle().Foreground(ok)
 	warnStyle = lipgloss.NewStyle().Foreground(warn)

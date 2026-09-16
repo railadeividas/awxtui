@@ -245,18 +245,25 @@ func listURL(path, orderBy string, pageSize int, search string) string {
 	return path + "?" + q.Encode()
 }
 
-// Me returns the username of the authenticated user, used as a connection check.
-func (c *Client) Me(ctx context.Context) (string, error) {
-	users, err := list[struct {
-		Username string `json:"username"`
-	}](ctx, c, "/api/v2/me/")
+// User identifies the account a token belongs to.
+type User struct {
+	ID       int    `json:"id"`
+	Username string `json:"username"`
+}
+
+// Me returns the authenticated user, used as a connection check and as the
+// identity a "mine" filter is built from. The id matters as well as the name:
+// /api/v2/unified_jobs/?created_by= takes the numeric id, and a username can
+// be renamed out from under a saved filter.
+func (c *Client) Me(ctx context.Context) (User, error) {
+	users, err := list[User](ctx, c, "/api/v2/me/")
 	if err != nil {
-		return "", err
+		return User{}, err
 	}
 	if len(users) == 0 {
-		return "", fmt.Errorf("token accepted but no user returned")
+		return User{}, fmt.Errorf("token accepted but no user returned")
 	}
-	return users[0].Username, nil
+	return users[0], nil
 }
 
 // JobTemplate is a launchable template.
@@ -303,6 +310,7 @@ type Job struct {
 	JobType       string     `json:"job_type"`
 	SummaryFields struct {
 		CreatedBy struct {
+			ID       int    `json:"id"`
 			Username string `json:"username"`
 		} `json:"created_by"`
 		Inventory struct {
@@ -380,6 +388,103 @@ func (c *Client) Jobs(ctx context.Context, pageURL, search string) (Page[Job], e
 // jobsPageSize is smaller than PageSize: job lists are effectively unbounded,
 // so they are paged in on demand rather than read whole.
 const jobsPageSize = 100
+
+// Supported reports whether awxtui can read this run. /api/v2/unified_jobs/
+// also serves workflow jobs, ad hoc commands and system jobs, which live in
+// collections awxtui does not implement; Resource would quietly call them
+// jobs and then ask /api/v2/jobs/ for output that is not there.
+func (j Job) Supported() bool {
+	switch j.Type {
+	case "", ResourceJobs.recordType(),
+		ResourceProjectUpdates.recordType(), ResourceInventoryUpdates.recordType():
+		return true
+	}
+	return false
+}
+
+// JobFilter narrows a unified job list, server-side. Every field AWX can
+// answer for itself belongs here rather than in a loop over loaded rows: the
+// list is paged, so filtering what happens to be on screen would hide
+// everything that is not.
+type JobFilter struct {
+	// CreatedBy is a user id. It is what makes a personal history usable at
+	// all: 310 runs out of 170290 on the instance this was built against.
+	CreatedBy int
+	// Status is an AWX job status: running, failed, successful…
+	Status string
+	// Type is an AWX record type: job, project_update, inventory_update.
+	Type string
+}
+
+func (f JobFilter) query() string {
+	var q string
+	if f.CreatedBy > 0 {
+		q += "&created_by=" + strconv.Itoa(f.CreatedBy)
+	}
+	if f.Status != "" {
+		q += "&status=" + url.QueryEscape(f.Status)
+	}
+	if f.Type != "" {
+		q += "&type=" + url.QueryEscape(f.Type)
+	}
+	return q
+}
+
+// UnifiedJobs returns a page of runs of every kind — playbook jobs, project
+// updates and inventory syncs — newest first. /api/v2/jobs/ holds playbook
+// jobs alone, so a sync started from awxtui never appears there; this is the
+// only list that shows everything that ran. AWX composes ?search= with every
+// filter above.
+func (c *Client) UnifiedJobs(ctx context.Context, pageURL, search string, f JobFilter) (Page[Job], error) {
+	first := listURL("/api/v2/unified_jobs/", "-id", jobsPageSize, search) + f.query()
+	return listPage[Job](ctx, c, firstOr(pageURL, first))
+}
+
+// maxByID bounds one id__in lookup: AWX takes the ids in the query string,
+// and a URL is not unbounded.
+const maxByID = 100
+
+// listByIDs reads a named set of records in one request. Records AWX no
+// longer has are simply absent from the answer, which is how a deleted one is
+// told apart from a failed lookup.
+func listByIDs[T any](ctx context.Context, c *Client, path string, ids []int) ([]T, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if len(ids) > maxByID {
+		ids = ids[:maxByID]
+	}
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.Itoa(id)
+	}
+	q := url.Values{
+		"id__in":    {strings.Join(parts, ",")},
+		"page_size": {strconv.Itoa(len(ids))},
+	}
+	return list[T](ctx, c, path+"?"+q.Encode())
+}
+
+// UnifiedJobsByID re-reads a set of runs of any kind in one request, so a
+// locally kept list of pins can be refreshed without one GET per entry.
+func (c *Client) UnifiedJobsByID(ctx context.Context, ids []int) ([]Job, error) {
+	return listByIDs[Job](ctx, c, "/api/v2/unified_jobs/", ids)
+}
+
+// JobTemplatesByID reads a set of templates by id.
+func (c *Client) JobTemplatesByID(ctx context.Context, ids []int) ([]JobTemplate, error) {
+	return listByIDs[JobTemplate](ctx, c, "/api/v2/job_templates/", ids)
+}
+
+// InventoriesByID reads a set of inventories by id.
+func (c *Client) InventoriesByID(ctx context.Context, ids []int) ([]Inventory, error) {
+	return listByIDs[Inventory](ctx, c, "/api/v2/inventories/", ids)
+}
+
+// ProjectsByID reads a set of projects by id.
+func (c *Client) ProjectsByID(ctx context.Context, ids []int) ([]Project, error) {
+	return listByIDs[Project](ctx, c, "/api/v2/projects/", ids)
+}
 
 // UnifiedJob re-reads one run of any kind, for the status and elapsed time a
 // list row goes stale on.

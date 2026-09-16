@@ -109,12 +109,16 @@ func newPagedMock(t *testing.T, templates, jobs, hosts int) *pagedMock {
 	mux.HandleFunc("/api/v2/job_templates/", func(w http.ResponseWriter, r *http.Request) {
 		p.paginate(w, r, tpls)
 	})
-	mux.HandleFunc("/api/v2/jobs/", func(w http.ResponseWriter, r *http.Request) {
+	// The Jobs tab reads /api/v2/unified_jobs/; /api/v2/jobs/ is still served
+	// because real AWX serves both, from the same records.
+	jobList := func(w http.ResponseWriter, r *http.Request) {
 		p.mu.Lock()
 		current := append([]any{}, p.jobs...)
 		p.mu.Unlock()
 		p.paginate(w, r, current)
-	})
+	}
+	mux.HandleFunc("/api/v2/jobs/", jobList)
+	mux.HandleFunc("/api/v2/unified_jobs/", jobList)
 	mux.HandleFunc("/api/v2/inventories/", func(w http.ResponseWriter, r *http.Request) {
 		p.paginate(w, r, []any{map[string]any{
 			"id": 3, "name": "production", "total_hosts": hosts,

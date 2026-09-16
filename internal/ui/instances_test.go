@@ -31,16 +31,18 @@ func namedMock(t *testing.T, label string, count int) *httptest.Server {
 		}
 		write(w, map[string]any{"count": len(items), "next": nil, "results": items})
 	})
-	mux.HandleFunc("/api/v2/jobs/", func(w http.ResponseWriter, r *http.Request) {
+	empty := func(w http.ResponseWriter, r *http.Request) {
 		write(w, map[string]any{"count": 0, "next": nil, "results": []any{}})
-	})
+	}
+	mux.HandleFunc("/api/v2/jobs/", empty)
+	mux.HandleFunc("/api/v2/unified_jobs/", empty)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
 
 // twoInstanceModel wires a model to two mock instances, starting on "prod".
-func twoInstanceModel(t *testing.T, prod, staging *httptest.Server) Model {
+func twoInstanceModel(t *testing.T, prod, staging *httptest.Server, opts ...Option) Model {
 	t.Helper()
 	list := []InstanceInfo{
 		{Name: "prod", URL: prod.URL, ReadOnly: true},
@@ -56,7 +58,7 @@ func twoInstanceModel(t *testing.T, prod, staging *httptest.Server) Model {
 		return nil, fmt.Errorf("no instance named %q", name)
 	}
 	m := New(awx.New(prod.URL, "t", false).ReadOnly(),
-		WithInstances(list, "prod"), WithConnector(connector))
+		append([]Option{WithInstances(list, "prod"), WithConnector(connector)}, opts...)...)
 	m = step(t, m, tea.WindowSizeMsg{Width: 100, Height: 26})
 	return step(t, m, m.connect())
 }
@@ -162,7 +164,7 @@ func TestStaleRepliesFromOldInstanceAreDropped(t *testing.T) {
 	if m.mode == modeHosts {
 		t.Error("a stale hosts reply hijacked the view")
 	}
-	m = step(t, m, connectedMsg{user: "prod-user", gen: oldGen})
+	m = step(t, m, connectedMsg{user: awx.User{ID: 1, Username: "prod-user"}, gen: oldGen})
 	if m.user != "staging-user" {
 		t.Errorf("stale connect reply changed the user to %q", m.user)
 	}

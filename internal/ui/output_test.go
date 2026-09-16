@@ -57,9 +57,11 @@ func outputMock(t *testing.T) *httptest.Server {
 		write(w, map[string]any{"count": 0, "results": []any{}})
 	})
 	job := map[string]any{"id": 77, "name": "Deploy web app", "status": "failed", "elapsed": 12.0}
-	mux.HandleFunc("/api/v2/jobs/", func(w http.ResponseWriter, r *http.Request) {
+	jobList := func(w http.ResponseWriter, r *http.Request) {
 		write(w, map[string]any{"count": 1, "results": []any{job}})
-	})
+	}
+	mux.HandleFunc("/api/v2/jobs/", jobList)
+	mux.HandleFunc("/api/v2/unified_jobs/", jobList)
 	mux.HandleFunc("/api/v2/jobs/77/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, job)
 	})

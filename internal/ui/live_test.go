@@ -251,6 +251,81 @@ func TestLiveLaunchForm(t *testing.T) {
 // and an inventory's sources are read before any of them is touched.
 //
 //	AWXTUI_LIVE=1 go test -v ./internal/ui -run TestLiveSyncTargets
+//
+// TestLiveMyRuns checks the "started by me" filter against a real instance,
+// read-only. It is the whole reason the filter exists: on the AWX this was
+// built against the unfiltered list holds 170290 runs and the filtered one
+// 310.
+func TestLiveMyRuns(t *testing.T) {
+	if os.Getenv("AWXTUI_LIVE") == "" {
+		t.Skip("set AWXTUI_LIVE=1 to run against a real AWX instance")
+	}
+	url, token := os.Getenv("AWX_URL"), os.Getenv("AWX_TOKEN")
+	if url == "" || token == "" {
+		t.Skip("AWX_URL and AWX_TOKEN must be set")
+	}
+
+	m := New(awx.New(url, token, os.Getenv("AWX_INSECURE") != "").ReadOnly())
+	m = step(t, m, tea.WindowSizeMsg{Width: 140, Height: 36})
+	m = step(t, m, m.connect())
+	if m.err != nil {
+		t.Fatalf("connect failed: %v", m.err)
+	}
+	if m.userID == 0 {
+		t.Fatalf("/api/v2/me/ gave no user id for %s; the owner filter has nothing to filter by", m.user)
+	}
+
+	m = step(t, m, key("2"))
+	all := m.count[tabJobs]
+	// f, then right on the first row ("Started by": anyone -> me), then enter.
+	m = step(t, m, key("f"))
+	m = step(t, m, key("right"))
+	m = step(t, m, key("enter"))
+	if m.err != nil {
+		t.Fatalf("the owner filter failed: %v", m.err)
+	}
+	mine := m.count[tabJobs]
+	t.Logf("%s: %d runs of their own out of %d on the instance", m.user, mine, all)
+	if mine == 0 {
+		t.Skip("this account has started nothing on this instance")
+	}
+	if mine >= all {
+		t.Errorf("mine (%d) is not narrower than the full list (%d); the filter did not reach AWX", mine, all)
+	}
+	kinds := map[string]int{}
+	for _, j := range m.jobs {
+		if j.SummaryFields.CreatedBy.Username != m.user {
+			t.Errorf("#%d was created by %q, not %q", j.ID, j.SummaryFields.CreatedBy.Username, m.user)
+		}
+		kinds[j.KindLabel()]++
+	}
+	t.Logf("kinds in the filtered list: %v", kinds)
+	show(t, "started by me", m.View())
+
+	// Narrowing further: only the failures, still server-side.
+	m = step(t, m, key("f"))
+	m = step(t, m, key("down"))
+	m = step(t, m, key("right"))
+	m = step(t, m, key("right"))
+	if got := m.panel.draft.status; got != "failed" {
+		t.Fatalf("expected the status choice to land on failed, got %q", got)
+	}
+	m = step(t, m, key("enter"))
+	if m.err != nil {
+		t.Fatalf("the status filter failed: %v", m.err)
+	}
+	t.Logf("failed runs of %s: %d, label %q", m.user, m.count[tabJobs], m.countLabel(tabJobs))
+	if m.count[tabJobs] > mine {
+		t.Errorf("failed (%d) cannot exceed all of this user's runs (%d)", m.count[tabJobs], mine)
+	}
+	for _, j := range m.jobs {
+		if j.Status != "failed" {
+			t.Errorf("#%d has status %q in a failed-only view", j.ID, j.Status)
+		}
+	}
+	show(t, "started by me, failed", m.View())
+}
+
 func TestLiveSyncTargets(t *testing.T) {
 	if os.Getenv("AWXTUI_LIVE") == "" {
 		t.Skip("set AWXTUI_LIVE=1 to run against a real AWX instance")

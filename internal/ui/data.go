@@ -14,7 +14,7 @@ import (
 
 type (
 	connectedMsg struct {
-		user string
+		user awx.User
 		gen  int
 	}
 
@@ -131,6 +131,11 @@ func (m Model) connect() tea.Msg {
 func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 	c, gen := m.client, m.gen
 	meta := pageMeta{cont: cont, query: strings.TrimSpace(search), seq: m.searchSeq[t], gen: m.gen}
+	// A pinned-only view is not a page of a list: it is a named set of ids,
+	// read in one request and never paged.
+	if m.show[t].pinnedOnly {
+		return m.fetchPinned(t, meta)
+	}
 	switch t {
 	case tabTemplates:
 		return func() tea.Msg {
@@ -144,10 +149,14 @@ func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			return templatesMsg{pageMeta: meta, items: p.Results}
 		}
 	case tabJobs:
+		// /api/v2/jobs/ holds playbook jobs alone, so a project update or an
+		// inventory sync would be missing from it entirely. The unified list
+		// holds all three and takes the same filters.
+		filter := m.jobFilter()
 		return func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
-			p, err := c.Jobs(ctx, pageURL, search)
+			p, err := c.UnifiedJobs(ctx, pageURL, search, filter)
 			if err != nil {
 				return errMsg{err: err, gen: gen}
 			}
@@ -178,6 +187,73 @@ func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// jobFilter turns what the Jobs tab is showing into the query AWX runs.
+func (m Model) jobFilter() awx.JobFilter {
+	f := awx.JobFilter{Status: m.show[tabJobs].status, Type: m.show[tabJobs].kind}
+	if m.show[tabJobs].mine {
+		f.CreatedBy = m.userID
+	}
+	return f
+}
+
+// fetchPinned reads one tab's pinned records in a single request. The ids
+// come from disk, so the list survives a restart; the records come from AWX,
+// so their status is current. Records AWX no longer has come back missing
+// rather than stale, and the count says so.
+func (m Model) fetchPinned(t tab, meta pageMeta) tea.Cmd {
+	c, gen := m.client, m.gen
+	ids := m.store.IDs(m.instance, pinGroup(t))
+	meta.count = len(ids)
+	keep := m.show[t]
+	me := m.user
+	return func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		switch t {
+		case tabJobs:
+			found, err := c.UnifiedJobsByID(ctx, ids)
+			if err != nil {
+				return errMsg{err: err, gen: gen}
+			}
+			// The other facets are applied here rather than by AWX: a pinned
+			// set is small and already in hand, and id__in plus a status
+			// filter would hide a pin instead of listing it as it is.
+			var kept []awx.Job
+			for _, j := range found {
+				if keep.status != "" && j.Status != keep.status {
+					continue
+				}
+				if keep.kind != "" && j.Type != keep.kind {
+					continue
+				}
+				if keep.mine && j.SummaryFields.CreatedBy.Username != me {
+					continue
+				}
+				kept = append(kept, j)
+			}
+			return jobsMsg{pageMeta: meta, items: inPinnedOrder(ids, kept, jobID)}
+		case tabTemplates:
+			found, err := c.JobTemplatesByID(ctx, ids)
+			if err != nil {
+				return errMsg{err: err, gen: gen}
+			}
+			return templatesMsg{pageMeta: meta, items: inPinnedOrder(ids, found, templateID)}
+		case tabInventories:
+			found, err := c.InventoriesByID(ctx, ids)
+			if err != nil {
+				return errMsg{err: err, gen: gen}
+			}
+			return inventoriesMsg{pageMeta: meta, items: inPinnedOrder(ids, found, inventoryID)}
+		default:
+			found, err := c.ProjectsByID(ctx, ids)
+			if err != nil {
+				return errMsg{err: err, gen: gen}
+			}
+			return projectsMsg{pageMeta: meta, items: inPinnedOrder(ids, found, projectID)}
+		}
+	}
 }
 
 // searchDebounce waits for typing to settle before querying AWX.
@@ -374,9 +450,13 @@ func tick(d time.Duration) tea.Cmd {
 
 // ---- row builders ----
 
-func templateRows(items []awx.JobTemplate) []row {
+func (m Model) templateRows(items []awx.JobTemplate) []row {
 	rows := make([]row, 0, len(items))
 	for _, t := range items {
+		pinned := ""
+		if m.pinned(tabTemplates, t.ID) {
+			pinned = "pinned"
+		}
 		last := statusBadge(t.SummaryFields.LastJob.Status)
 		when := dimStyle.Render("—")
 		if t.LastJobRun != nil {
@@ -385,44 +465,67 @@ func templateRows(items []awx.JobTemplate) []row {
 		rows = append(rows, row{
 			id: t.ID,
 			cells: []string{
-				t.Name,
+				m.pinMark(tabTemplates, t.ID, t.Name),
 				dimStyle.Render(t.SummaryFields.Project.Name),
 				dimStyle.Render(t.SummaryFields.Inventory.Name),
 				last,
 				when,
 			},
-			search: strings.ToLower(t.Name + " " + t.SummaryFields.Project.Name + " " + t.SummaryFields.Inventory.Name),
+			search: strings.ToLower(t.Name + " " + t.SummaryFields.Project.Name + " " +
+				t.SummaryFields.Inventory.Name + " " + pinned),
 		})
 	}
 	return rows
 }
 
-func jobRows(items []awx.Job) []row {
+// jobRows renders the Jobs tab. Two things about a row matter beyond what
+// AWX says about the job: whether it is pinned, and whether it is yours. Both
+// are marked rather than filtered, so they are still visible in the
+// unfiltered list where they are hardest to spot — the instance this was
+// built against holds 170290 runs.
+func (m Model) jobRows(items []awx.Job) []row {
 	rows := make([]row, 0, len(items))
 	for _, j := range items {
 		when := dimStyle.Render("—")
 		if j.Started != nil {
 			when = dimStyle.Render(ago(*j.Started))
 		}
+		id, pinned := m.pinMark(tabJobs, j.ID, dimStyle.Render(fmt.Sprintf("#%d", j.ID))), ""
+		if m.pinned(tabJobs, j.ID) {
+			pinned = "pinned"
+		}
+		// The unified list mixes three kinds of run under one set of
+		// columns, where a project update and a playbook job would otherwise
+		// read identically.
+		name := j.Name
+		if j.IsSync() {
+			name += dimStyle.Render(" · " + j.KindLabel())
+		}
+		// Your own runs say "you" rather than your username: a colour alone
+		// would be invisible on a monochrome terminal, and scanning a column
+		// of identical usernames for your own is the problem being solved.
+		by := dimStyle.Render(j.SummaryFields.CreatedBy.Username)
+		mine := ""
+		if m.user != "" && j.SummaryFields.CreatedBy.Username == m.user {
+			by, mine = mineStyle.Render("you"), "mine"
+		}
 		rows = append(rows, row{
-			id: j.ID,
-			cells: []string{
-				dimStyle.Render(fmt.Sprintf("#%d", j.ID)),
-				j.Name,
-				statusBadge(j.Status),
-				dimStyle.Render(duration(j.Elapsed)),
-				when,
-				dimStyle.Render(j.SummaryFields.CreatedBy.Username),
-			},
-			search: strings.ToLower(fmt.Sprintf("%d %s %s %s", j.ID, j.Name, j.Status, j.SummaryFields.CreatedBy.Username)),
+			id:    j.ID,
+			cells: []string{id, name, statusBadge(j.Status), dimStyle.Render(duration(j.Elapsed)), when, by},
+			search: strings.ToLower(fmt.Sprintf("%d %s %s %s %s %s %s",
+				j.ID, j.Name, j.Status, j.SummaryFields.CreatedBy.Username, j.KindLabel(), pinned, mine)),
 		})
 	}
 	return rows
 }
 
-func inventoryRows(items []awx.Inventory) []row {
+func (m Model) inventoryRows(items []awx.Inventory) []row {
 	rows := make([]row, 0, len(items))
 	for _, inv := range items {
+		pinned := ""
+		if m.pinned(tabInventories, inv.ID) {
+			pinned = "pinned"
+		}
 		health := okStyle.Render("healthy")
 		if inv.HostsWithActiveFailures > 0 {
 			health = errStyle.Render(fmt.Sprintf("%d failing", inv.HostsWithActiveFailures))
@@ -432,14 +535,14 @@ func inventoryRows(items []awx.Inventory) []row {
 		rows = append(rows, row{
 			id: inv.ID,
 			cells: []string{
-				inv.Name,
+				m.pinMark(tabInventories, inv.ID, inv.Name),
 				dimStyle.Render(inv.SummaryFields.Organization.Name),
 				dimStyle.Render(fmt.Sprintf("%d", inv.TotalHosts)),
 				dimStyle.Render(fmt.Sprintf("%d", inv.TotalGroups)),
 				health,
 				inventorySourceCell(inv),
 			},
-			search: strings.ToLower(inv.Name + " " + inv.SummaryFields.Organization.Name),
+			search: strings.ToLower(inv.Name + " " + inv.SummaryFields.Organization.Name + " " + pinned),
 		})
 	}
 	return rows
@@ -459,9 +562,13 @@ func inventorySourceCell(inv awx.Inventory) string {
 	return dimStyle.Render(n)
 }
 
-func projectRows(items []awx.Project) []row {
+func (m Model) projectRows(items []awx.Project) []row {
 	rows := make([]row, 0, len(items))
 	for _, p := range items {
+		pinned := ""
+		if m.pinned(tabProjects, p.ID) {
+			pinned = "pinned"
+		}
 		when := dimStyle.Render("—")
 		if p.LastUpdated != nil {
 			when = dimStyle.Render(ago(*p.LastUpdated))
@@ -477,13 +584,13 @@ func projectRows(items []awx.Project) []row {
 		rows = append(rows, row{
 			id: p.ID,
 			cells: []string{
-				p.Name,
+				m.pinMark(tabProjects, p.ID, p.Name),
 				dimStyle.Render(scm),
 				dimStyle.Render(branch),
 				statusBadge(p.Status),
 				when,
 			},
-			search: strings.ToLower(p.Name + " " + scm + " " + branch),
+			search: strings.ToLower(p.Name + " " + scm + " " + branch + " " + pinned),
 		})
 	}
 	return rows

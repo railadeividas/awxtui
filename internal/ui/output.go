@@ -278,6 +278,10 @@ func (m Model) handleOutputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.vp.GotoBottom()
 		}
 		return m, nil
+	case "p":
+		// Pinning is most useful exactly here: watching a run is when you
+		// decide it is one you will want to find again.
+		return m, m.togglePin(tabJobs, m.outputJob.ID, m.outputJob.Name, m.outputJob.Type)
 	case "r":
 		m.err = nil
 		return m, m.fetchOutput(m.outputJob.Resource(), m.outputJob.ID, 0)
@@ -363,6 +367,7 @@ func (m Model) outputFooter() string {
 		[2]string{"]/[", "failure"},
 		[2]string{"t/T", "task"},
 		[2]string{"f", "follow"},
+		[2]string{"p", m.outputPinLabel()},
 		[2]string{"r", "reload"},
 	)
 	if m.outputJob.IsRunning() {

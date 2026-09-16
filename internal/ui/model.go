@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/railadeividas/awxtui/internal/awx"
+	"github.com/railadeividas/awxtui/internal/state"
 )
 
 type tab int
@@ -38,6 +39,7 @@ const (
 	modeError
 	modeInstances
 	modeProject
+	modeShow
 )
 
 const (
@@ -64,9 +66,18 @@ const (
 
 // Model is the whole application state.
 type Model struct {
-	client   *awx.Client
-	user     string
+	client *awx.Client
+	user   string
+	// userID is what a "mine" filter is built from: AWX takes the numeric id
+	// on created_by, and a rename would silently empty a filter on the name.
+	userID   int
 	instance string
+
+	// show is what each tab is narrowed to, and panel is that choice being
+	// edited; store holds the pins, which no AWX endpoint knows about.
+	show  [tabCount]showFilter
+	panel showPanel
+	store *state.Store
 
 	// instance switching
 	instances      []InstanceInfo
@@ -170,6 +181,7 @@ func New(c *awx.Client, opts ...Option) Model {
 		spin:        sp,
 		follow:      true,
 		osearch:     newOutputSearch(),
+		store:       state.Memory(),
 	}
 	for _, opt := range opts {
 		opt(&m)
@@ -426,7 +438,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.gen {
 			return m, nil
 		}
-		m.user = msg.user
+		m.user, m.userID = msg.user.Username, msg.user.ID
 		return m, m.load(tabTemplates, true)
 
 	case templatesMsg:
@@ -441,7 +453,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.templates = msg.items
 			m.serverQuery[tabTemplates] = msg.query
 		}
-		m.rows[tabTemplates] = templateRows(m.templates)
+		m.rows[tabTemplates] = m.templateRows(m.templates)
 		m.next[tabTemplates] = msg.next
 		m.count[tabTemplates] = msg.count
 		m.loaded[tabTemplates] = true
@@ -469,7 +481,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m.jobs = msg.items
 		}
-		m.rows[tabJobs] = jobRows(m.jobs)
+		m.rows[tabJobs] = m.jobRows(m.jobs)
 		if !merged {
 			m.next[tabJobs] = msg.next
 		}
@@ -491,7 +503,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inventories = msg.items
 			m.serverQuery[tabInventories] = msg.query
 		}
-		m.rows[tabInventories] = inventoryRows(m.inventories)
+		m.rows[tabInventories] = m.inventoryRows(m.inventories)
 		m.next[tabInventories] = msg.next
 		m.count[tabInventories] = msg.count
 		m.loaded[tabInventories] = true
@@ -510,7 +522,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.projects = msg.items
 			m.serverQuery[tabProjects] = msg.query
 		}
-		m.rows[tabProjects] = projectRows(m.projects)
+		m.rows[tabProjects] = m.projectRows(m.projects)
 		m.next[tabProjects] = msg.next
 		m.count[tabProjects] = msg.count
 		m.loaded[tabProjects] = true
@@ -719,6 +731,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeProject:
 		return m.handleProjectKey(msg)
 
+	case modeShow:
+		return m.handleShowKey(msg)
+
 	case modeOutput:
 		return m.handleOutputKey(msg)
 
@@ -801,6 +816,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.activate()
 	case "s":
 		return m.sync()
+	case "f":
+		m.openShowPanel()
+		return m, nil
+	case "p":
+		return m, m.togglePinSelected()
 	case "c":
 		if m.active == tabJobs {
 			if j, ok := m.selectedJob(); ok && j.IsRunning() {
@@ -836,6 +856,14 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 	case tabJobs:
 		j, ok := m.selectedJob()
 		if !ok {
+			return m, nil
+		}
+		// The unified list can hold kinds awxtui has no output endpoint for.
+		// Saying so beats fetching /api/v2/jobs/<id>/stdout/ for a workflow
+		// job and reporting whatever 404 comes back.
+		if !j.Supported() {
+			m.err = fmt.Errorf("#%d is a %s; awxtui cannot show its output yet",
+				j.ID, strings.ReplaceAll(j.Type, "_", " "))
 			return m, nil
 		}
 		cmd := m.openOutput(j)

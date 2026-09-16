@@ -65,9 +65,13 @@ func (m *Model) switchInstance(name string) tea.Cmd {
 		return nil
 	}
 
+	// The store outlives the switch. It is keyed by instance name, so one
+	// store holds both histories; building a fresh model without it would
+	// quietly demote pins to memory-only for the rest of the session.
 	fresh := New(client,
 		WithInstances(m.instances, name),
 		WithConnector(m.connector),
+		WithStore(m.store),
 	)
 	fresh.width, fresh.height, fresh.ready = m.width, m.height, m.ready
 	fresh.spin = m.spin

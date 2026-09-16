@@ -25,6 +25,16 @@ type mock struct {
 	mu       sync.Mutex
 	launches []map[string]any
 	posts    []string
+	// unifiedQueries records the query string of every /api/v2/unified_jobs/
+	// request, so a test can assert the filter actually went to AWX rather
+	// than being applied to rows already on screen.
+	unifiedQueries []string
+}
+
+func (m *mock) unified() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.unifiedQueries...)
 }
 
 // postedTo reports the paths the model POSTed to, in order.
@@ -76,6 +86,43 @@ func mockAWX(t *testing.T) *mock {
 		}
 		return hits
 	}
+	// filtered mirrors the query filters real AWX applies to a list, on top
+	// of ?search=: id__in on every collection, and created_by/status/type on
+	// the job lists. A mock that ignored them would let a filter that never
+	// reached AWX still look like it worked.
+	filtered := func(r *http.Request, items []any) []any {
+		hits := searched(r, items)
+		q := r.URL.Query()
+		match := func(rec map[string]any, param string, of func(map[string]any) string) bool {
+			want := q.Get(param)
+			return want == "" || of(rec) == want
+		}
+		var kept []any
+		for _, it := range hits {
+			rec, _ := it.(map[string]any)
+			if ids := q.Get("id__in"); ids != "" {
+				found := false
+				for _, id := range strings.Split(ids, ",") {
+					found = found || id == fmt.Sprint(rec["id"])
+				}
+				if !found {
+					continue
+				}
+			}
+			createdBy := func(rec map[string]any) string {
+				sf, _ := rec["summary_fields"].(map[string]any)
+				by, _ := sf["created_by"].(map[string]any)
+				return fmt.Sprint(by["id"])
+			}
+			if !match(rec, "created_by", createdBy) ||
+				!match(rec, "status", func(rec map[string]any) string { return fmt.Sprint(rec["status"]) }) ||
+				!match(rec, "type", func(rec map[string]any) string { return fmt.Sprint(rec["type"]) }) {
+				continue
+			}
+			kept = append(kept, it)
+		}
+		return kept
+	}
 	write := func(w http.ResponseWriter, v any) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(v)
@@ -85,10 +132,55 @@ func mockAWX(t *testing.T) *mock {
 			http.Error(w, `{"detail":"bad token"}`, http.StatusUnauthorized)
 			return
 		}
-		write(w, page(map[string]any{"username": "admin"}))
+		write(w, page(map[string]any{"id": 1, "username": "admin"}))
+	})
+	// /api/v2/unified_jobs/ is the only list that holds all three kinds of
+	// run. Real AWX filters it by created_by (the numeric user id), by
+	// id__in, and by ?search=, and composes all three; so does this. The
+	// extra records exist only here, exactly as on a real instance: a sync
+	// and a workflow job never appear in /api/v2/jobs/.
+	unified := []any{
+		map[string]any{
+			"id": 43, "type": "job", "name": "Deploy web app", "status": "running", "elapsed": 12.4,
+			"started": now.Add(-12 * time.Second), "job_type": "run",
+			"summary_fields": map[string]any{"created_by": map[string]any{"id": 1, "username": "admin"}},
+		},
+		map[string]any{
+			"id": 42, "type": "job", "name": "Deploy web app", "status": "successful", "elapsed": 96.2,
+			"started": now.Add(-90 * time.Minute), "job_type": "run",
+			"summary_fields": map[string]any{"created_by": map[string]any{"id": 1, "username": "admin"}},
+		},
+		map[string]any{
+			"id": 40, "type": "job", "name": "Someone else's run", "status": "failed", "elapsed": 3.0,
+			"started": now.Add(-4 * time.Hour), "job_type": "run",
+			"summary_fields": map[string]any{"created_by": map[string]any{"id": 2, "username": "colleague"}},
+		},
+		map[string]any{
+			"id": 21, "type": "inventory_update", "name": "staging - git", "status": "successful",
+			"elapsed": 4.0, "started": now.Add(-30 * time.Minute),
+			"summary_fields": map[string]any{"created_by": map[string]any{"id": 1, "username": "admin"}},
+		},
+		map[string]any{
+			"id": 12, "type": "project_update", "name": "infra", "status": "successful",
+			"elapsed": 6.0, "started": now.Add(-40 * time.Minute),
+			"summary_fields": map[string]any{"created_by": map[string]any{"id": 1, "username": "admin"}},
+		},
+		map[string]any{
+			// A kind awxtui has no output endpoint for. Real AWX serves these
+			// from the unified list and nowhere awxtui reads.
+			"id": 11, "type": "workflow_job", "name": "Nightly pipeline", "status": "successful",
+			"elapsed": 300.0, "started": now.Add(-3 * time.Hour),
+			"summary_fields": map[string]any{"created_by": map[string]any{"id": 1, "username": "admin"}},
+		},
+	}
+	mux.HandleFunc("/api/v2/unified_jobs/", func(w http.ResponseWriter, r *http.Request) {
+		mk.mu.Lock()
+		mk.unifiedQueries = append(mk.unifiedQueries, r.URL.RawQuery)
+		mk.mu.Unlock()
+		write(w, page(filtered(r, unified)...))
 	})
 	mux.HandleFunc("/api/v2/job_templates/", func(w http.ResponseWriter, r *http.Request) {
-		write(w, page(searched(r, []any{map[string]any{
+		write(w, page(filtered(r, []any{map[string]any{
 			"id": 7, "name": "Deploy web app", "job_type": "run", "playbook": "deploy.yml",
 			"last_job_run": now.Add(-90 * time.Minute),
 			"summary_fields": map[string]any{
@@ -110,11 +202,17 @@ func mockAWX(t *testing.T) *mock {
 		write(w, page(searched(r, []any{map[string]any{
 			"id": 43, "name": "Deploy web app", "status": "running", "elapsed": 12.4,
 			"started": now.Add(-12 * time.Second), "job_type": "run",
-			"summary_fields": map[string]any{"created_by": map[string]any{"username": "admin"}},
+			"summary_fields": map[string]any{"created_by": map[string]any{"id": 1, "username": "admin"}},
 		}, map[string]any{
 			"id": 42, "name": "Deploy web app", "status": "successful", "elapsed": 96.2,
 			"started": now.Add(-90 * time.Minute), "job_type": "run",
-			"summary_fields": map[string]any{"created_by": map[string]any{"username": "admin"}},
+			"summary_fields": map[string]any{"created_by": map[string]any{"id": 1, "username": "admin"}},
+		}, map[string]any{
+			// AWX's job list is everyone's, which is the whole difficulty:
+			// your own runs are a minority of it.
+			"id": 40, "name": "Someone else's run", "status": "failed", "elapsed": 3.0,
+			"started": now.Add(-4 * time.Hour), "job_type": "run",
+			"summary_fields": map[string]any{"created_by": map[string]any{"id": 2, "username": "colleague"}},
 		}})...))
 	})
 	mux.HandleFunc("/api/v2/jobs/43/", func(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +376,7 @@ func mockAWX(t *testing.T) *mock {
 		))
 	})
 	mux.HandleFunc("/api/v2/inventories/", func(w http.ResponseWriter, r *http.Request) {
-		write(w, page(searched(r, []any{map[string]any{
+		write(w, page(filtered(r, []any{map[string]any{
 			"id": 3, "name": "production", "total_hosts": 12, "total_groups": 4,
 			"hosts_with_active_failures": 1,
 			// Two sources, so a sync has to start both and not just the first.
@@ -298,7 +396,7 @@ func mockAWX(t *testing.T) *mock {
 		))
 	})
 	mux.HandleFunc("/api/v2/projects/", func(w http.ResponseWriter, r *http.Request) {
-		write(w, page(searched(r, []any{map[string]any{
+		write(w, page(filtered(r, []any{map[string]any{
 			"id": 5, "name": "infra", "description": "fleet playbooks",
 			"scm_type": "git", "scm_branch": "main",
 			"scm_url":              "git@github.com:example/infra.git",
@@ -342,7 +440,7 @@ func mockAWX(t *testing.T) *mock {
 		return map[string]any{
 			"id": id, "type": kind, "name": name, "status": "running",
 			"started": now.Add(-2 * time.Second), "elapsed": 2.0,
-			"summary_fields": map[string]any{"created_by": map[string]any{"username": "admin"}},
+			"summary_fields": map[string]any{"created_by": map[string]any{"id": 1, "username": "admin"}},
 		}
 	}
 	mux.HandleFunc("/api/v2/projects/5/update/", func(w http.ResponseWriter, r *http.Request) {
@@ -729,7 +827,7 @@ func TestEveryViewRendersWithinTerminalBounds(t *testing.T) {
 		m := New(awx.New(srv.URL, "test-token", false))
 		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = step(t, m, m.connect())
-		for _, k := range []string{"1", "2", "3", "4", "?", "4", "enter", "G"} {
+		for _, k := range []string{"1", "2", "m", "p", "m", "3", "4", "?", "4", "enter", "G"} {
 			m = step(t, m, key(k))
 			out := m.View()
 			for i, line := range strings.Split(out, "\n") {

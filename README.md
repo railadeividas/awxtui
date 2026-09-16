@@ -96,9 +96,11 @@ NAME                     PROJECT      INVENTORY     LAST RUN       WHEN
 | `i` | switch to another configured instance |
 | `enter` | launch a template · open job output · list inventory hosts · open project details |
 | `s` | sync: SCM update a project · update an inventory's sources |
+| `p` | pin the highlighted record, or the run whose output is open |
+| `f` | narrow the view: pinned only, and on Jobs also owner, status and kind |
 | `↑↓` / `tab` | move between fields in the launch form; `←→` pick a choice, `space` toggles a multiselect, `ctrl+s` submits |
 | `c` | cancel a running job |
-| `f` | toggle follow mode in the job output view |
+| `f` | in the job output view: toggle follow mode |
 | `r` | refresh |
 | `?` | key help |
 | `q` / `esc` | back, or quit from the list |
@@ -161,8 +163,10 @@ the update records, and an update you cannot address is an update you cannot
 follow. Sources are therefore updated one at a time; if one fails to start, the
 error names it and says how many were already started, and nothing is retried.
 
-**Neither record appears in the Jobs tab** — `/api/v2/jobs/` holds playbook
-jobs alone. A project update and an inventory sync each live in their own
+**Neither record appears in `/api/v2/jobs/`** — it holds playbook jobs alone,
+which is why the Jobs tab reads `/api/v2/unified_jobs/` instead, where a sync
+you started is listed beside the playbook jobs and labelled as what it is.
+A project update and an inventory sync each live in their own
 collection, with their own detail, `/stdout/`, events and `/cancel/` endpoints,
 and their events are served from `/events/` rather than `/job_events/`. The
 output view follows whichever collection the run came from, names it in the
@@ -172,6 +176,56 @@ its new status shows.
 
 Syncing is a write: a read-only client refuses it before anything reaches the
 network, and a held-down `s` cannot start the same update twice.
+
+## Pinning and narrowing a view
+
+On a shared AWX every list is everyone's: 209 job templates and 98079 jobs on
+the instance this was built against, of which 310 runs belong to the account
+using awxtui. Two keys deal with that.
+
+**`p` pins the highlighted record** — a template, a job, an inventory, a
+project, or the run whose output is open, which is usually when you decide a
+run is worth finding again. AWX has no bookmark of any kind, so pins are kept
+locally in `~/.local/state/awxtui/pins.json` (`$XDG_STATE_HOME` honoured,
+`-state` overrides), per instance and per kind of record — job ids mean
+nothing on another AWX, and project #12 is not project update #12. A pinned
+row is marked `★`, and the file is written atomically, mode 600.
+
+**`f` narrows what a view shows.** The panel offers what that tab can be
+narrowed by:
+
+| Tab | Choices |
+| --- | --- |
+| Jobs | started by anyone / me · status any / running / failed / successful · kind anything / jobs / project updates / inventory syncs · everything / pinned only |
+| Templates, Inventories, Projects | everything / pinned only |
+
+`↑↓` picks a row, `←→` or `space` sets it, `c` clears everything, `enter`
+applies and `esc` leaves without changing anything. The active narrowing shows
+in the count line — `mine · failed · 46` — so a short list is never mistaken
+for a small instance.
+
+Every choice is sent to AWX, not applied to the rows that happen to be
+loaded: `created_by`, `status` and `type` as query parameters, and a
+pinned-only view as one `?id__in=` request. Lists are paged, so filtering what
+is on screen would hide everything that is not. `/` still searches, inside
+whatever the view is narrowed to.
+
+Two details follow from where the data comes from:
+
+- The Jobs tab reads **`/api/v2/unified_jobs/`**, not `/api/v2/jobs/`. The
+  latter holds playbook jobs alone, so a project update or an inventory sync
+  started from awxtui would be missing from it entirely. Runs that are not
+  playbook jobs are labelled in the list (`ansible-dns · project update`), and
+  the *kind* choice narrows to one of them. The unified list also serves kinds
+  awxtui has no output endpoint for — workflow jobs, ad-hoc commands, system
+  jobs — and opening one says so by name instead of asking `/api/v2/jobs/` for
+  output that was never there.
+- Your own runs say **`you`** in the `BY` column — a word, not just a colour,
+  so it survives a monochrome terminal.
+
+A pinned record AWX has since deleted is not silently dropped: the count reads
+`1 of 2`, which is the difference between a job that is gone and one awxtui
+failed to look up.
 
 ## Reading job output
 
@@ -231,6 +285,9 @@ playbooks, which a project that has never updated does not have.
 | `internal/ui/output.go` | job output view: find, highlight, failure/task jumps |
 | `internal/ui/projects.go` | project details: SCM settings, update flags, playbooks |
 | `internal/ui/table.go` | responsive column layout (columns shrink, then drop) |
+| `internal/ui/pins.go` | pinning, on every tab |
+| `internal/ui/show.go` | the f panel: what a view is narrowed to |
+| `internal/state` | pinned records, kept across restarts |
 | `internal/ui/theme.go` | colours and status badges |
 
 ## Tests
@@ -255,7 +312,9 @@ AWXTUI_LIVE=1 go test -v ./internal/ui -run TestLive
 The live tests pin the client to `ReadOnly()`, so they only ever issue GETs
 against a production instance: `TestLiveSyncTargets` checks what a sync *would*
 act on — `can_update` per project, and that each inventory's row agrees with
-its sources endpoint — without starting one.
+its sources endpoint — without starting one, and `TestLiveMyRuns` checks that
+"started by me" and "failed" are genuinely narrower than the full list and
+that every row they return matches.
 
 ## Pagination and search
 

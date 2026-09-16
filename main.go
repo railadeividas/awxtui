@@ -26,6 +26,7 @@ import (
 
 	"github.com/railadeividas/awxtui/internal/awx"
 	"github.com/railadeividas/awxtui/internal/config"
+	"github.com/railadeividas/awxtui/internal/state"
 	"github.com/railadeividas/awxtui/internal/ui"
 )
 
@@ -42,6 +43,7 @@ func run() error {
 		instance   = flag.String("instance", "", "name of the configured instance to use")
 		list       = flag.Bool("list", false, "list configured instances and exit")
 		readOnly   = flag.Bool("read-only", false, "refuse every request that would change AWX")
+		statePath  = flag.String("state", state.DefaultPath(), "path to the file of pinned records")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -96,10 +98,18 @@ func run() error {
 		return build(other)
 	}
 
+	// Pins are a convenience, not a prerequisite: an unreadable state file
+	// is worth a warning, not a refusal to start.
+	store, err := state.Load(*statePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "awxtui: warning: %v; pins will not persist\n", err)
+	}
+
 	p := tea.NewProgram(
 		ui.New(client,
 			ui.WithInstances(instanceList(file, inst), inst.Name),
 			ui.WithConnector(connector),
+			ui.WithStore(store),
 		),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),

@@ -19,8 +19,10 @@ func stripANSI(s string) string { return ansi.Strip(s) }
 
 // columns per tab
 var tabColumns = map[tab][]col{
-	tabTemplates:   {{title: "name", width: 0}, {title: "project", width: 22}, {title: "inventory", width: 20}, {title: "last run", width: 14}, {title: "when", width: 11}},
-	tabJobs:        {{title: "id", width: 7}, {title: "name", width: 0}, {title: "status", width: 13}, {title: "elapsed", width: 9}, {title: "started", width: 11}, {title: "by", width: 14}},
+	tabTemplates: {{title: "name", width: 0}, {title: "project", width: 22}, {title: "inventory", width: 20}, {title: "last run", width: 14}, {title: "when", width: 11}},
+	// The id column carries the pin marker as well as the number, and AWX job
+	// ids run to six digits on an instance of any age.
+	tabJobs:        {{title: "id", width: 10}, {title: "name", width: 0}, {title: "status", width: 13}, {title: "elapsed", width: 9}, {title: "started", width: 11}, {title: "by", width: 14}},
 	tabInventories: {{title: "name", width: 0}, {title: "organization", width: 22}, {title: "hosts", width: 7}, {title: "groups", width: 7}, {title: "health", width: 14}, {title: "sources", width: 9}},
 	tabProjects:    {{title: "name", width: 0}, {title: "scm", width: 10}, {title: "branch", width: 18}, {title: "status", width: 14}, {title: "updated", width: 11}},
 }
@@ -52,6 +54,8 @@ func (m Model) View() string {
 		b.WriteString(m.pane(m.instancesModal()))
 	case modeProject:
 		b.WriteString(m.pane(m.projectModal()))
+	case modeShow:
+		b.WriteString(m.pane(m.showModal()))
 	case modeHosts:
 		b.WriteString(m.hostsBody())
 	default:
@@ -152,6 +156,11 @@ func (m Model) countLabel(t tab) string {
 		label += " ⋯"
 	} else if m.next[t] != "" && m.pages[t] >= maxPages {
 		label += " (page limit)"
+	}
+	// What a view is narrowed to has to be on screen: "12" of your own
+	// failed runs and "12" of the instance's mean very different things.
+	if f := m.show[t]; f.active() {
+		label = f.summary() + " · " + label
 	}
 	return label
 }
@@ -438,8 +447,9 @@ func (m Model) helpModal() string {
 		{"/", "search (esc clears)"},
 		{"enter", "launch · open job output · list inventory hosts · project details"},
 		{"s", "sync: SCM update a project · update an inventory's sources"},
+		{"p", "pin the highlighted record or open output"},
+		{"f", "narrow what a list shows · follow job output"},
 		{"c", "cancel a running job"},
-		{"f", "follow job output"},
 		{"n / N", "next · previous search hit in output"},
 		{"] / [", "next · previous failure in output"},
 		{"t / T", "next · previous task in output"},
@@ -463,6 +473,9 @@ func (m Model) statusView() string {
 		keys = [][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}}
 	case modeFilter:
 		keys = [][2]string{{"type", "to filter"}, {"enter", "keep"}, {"esc", "clear"}}
+	case modeShow:
+		keys = [][2]string{{"↑↓", "choose"}, {"←→", "set"}, {"c", "clear"},
+			{"enter", "apply"}, {"esc", "cancel"}}
 	default:
 		action := "launch"
 		switch m.active {
@@ -477,7 +490,11 @@ func (m Model) statusView() string {
 		if m.active == tabProjects || m.active == tabInventories {
 			keys = append(keys, [2]string{"s", "sync"})
 		}
-		keys = append(keys, [2]string{"/", "search"}, [2]string{"r", "refresh"})
+		keys = append(keys,
+			[2]string{"p", m.pinLabel()},
+			[2]string{"f", "show"},
+			[2]string{"/", "search"},
+			[2]string{"r", "refresh"})
 		if len(m.instances) > 1 {
 			keys = append(keys, [2]string{"i", "instance"})
 		}
