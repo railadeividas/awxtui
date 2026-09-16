@@ -186,6 +186,9 @@ func New(c *awx.Client, opts ...Option) Model {
 	for _, opt := range opts {
 		opt(&m)
 	}
+	// Both the store and the instance name arrive as options, so what each
+	// tab is narrowed to can only be restored once they are all applied.
+	m.restoreViews()
 	return m
 }
 

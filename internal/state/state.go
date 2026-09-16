@@ -56,6 +56,11 @@ type fileData struct {
 	// so switching instances switches pin lists rather than mixing two
 	// AWXes together.
 	Instances map[string]map[string][]Pin `json:"instances"`
+	// Views is what each group's list is narrowed to, keyed the same way:
+	// instance, then group, then the name of the choice. It is kept as plain
+	// strings rather than a struct so that adding a choice to the panel does
+	// not change the file format or strand what is already saved.
+	Views map[string]map[string]map[string]string `json:"views,omitempty"`
 }
 
 // DefaultPath is ~/.local/state/awxtui/pins.json, honouring XDG_STATE_HOME.
@@ -169,6 +174,46 @@ func (s *Store) set(instance, group string, pins []Pin) {
 		return
 	}
 	s.data.Instances[instance][group] = pins
+}
+
+// View returns what one group's list was last narrowed to. A group that was
+// never narrowed returns nil, which is the unnarrowed view.
+func (s *Store) View(instance, group string) map[string]string {
+	src := s.data.Views[instance][group]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+// SetView records what a group's list is narrowed to. An empty set clears it,
+// so a cleared filter does not linger in the file as an empty object.
+func (s *Store) SetView(instance, group string, fields map[string]string) error {
+	kept := map[string]string{}
+	for k, v := range fields {
+		if v != "" {
+			kept[k] = v
+		}
+	}
+	if s.data.Views == nil {
+		s.data.Views = map[string]map[string]map[string]string{}
+	}
+	if s.data.Views[instance] == nil {
+		s.data.Views[instance] = map[string]map[string]string{}
+	}
+	if len(kept) == 0 {
+		delete(s.data.Views[instance], group)
+		if len(s.data.Views[instance]) == 0 {
+			delete(s.data.Views, instance)
+		}
+	} else {
+		s.data.Views[instance][group] = kept
+	}
+	return s.save()
 }
 
 // save writes the whole file atomically, so an interrupted write cannot leave

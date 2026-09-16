@@ -129,6 +129,46 @@ func (f *showFilter) set(field, value string) {
 	}
 }
 
+// filterFields is every choice a filter can hold, in one place, so saving and
+// restoring stay in step with the panel as choices are added.
+var filterFields = []string{"mine", "pinned", "status", "kind"}
+
+// fields flattens a filter for the store.
+func (f showFilter) fields() map[string]string {
+	out := make(map[string]string, len(filterFields))
+	for _, name := range filterFields {
+		if v := f.get(name); v != "" {
+			out[name] = v
+		}
+	}
+	return out
+}
+
+// filterFromFields rebuilds a filter from what was saved. A value the panel no
+// longer offers is ignored rather than restored as a filter with no way to
+// clear it from the panel.
+func filterFromFields(t tab, fields map[string]string) showFilter {
+	var f showFilter
+	for _, c := range choicesFor(t) {
+		v := fields[c.field]
+		for _, o := range c.options {
+			if o.value == v && v != "" {
+				f.set(c.field, v)
+			}
+		}
+	}
+	return f
+}
+
+// restoreViews puts every tab back to what it was last narrowed to. It runs
+// at construction, so the first request a tab makes already carries the
+// filter rather than loading an unnarrowed list and replacing it.
+func (m *Model) restoreViews() {
+	for t := tab(0); t < tabCount; t++ {
+		m.show[t] = filterFromFields(t, m.store.View(m.instance, pinGroup(t)))
+	}
+}
+
 // cycle moves one choice to its next (or previous) option.
 func (p *showPanel) cycle(delta int) {
 	c := choicesFor(p.tab)[p.cursor]
@@ -178,6 +218,12 @@ func (m Model) handleShowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.show[t] = m.panel.draft
+		// The narrowing outlives the session, like the pins it can select.
+		// A failed write is said out loud: a filter silently not saved is
+		// found out tomorrow, when the view is not what it was left as.
+		if err := m.store.SetView(m.instance, pinGroup(t), m.show[t].fields()); err != nil {
+			m.err = err
+		}
 		return m, m.reload(t)
 	}
 	return m, nil

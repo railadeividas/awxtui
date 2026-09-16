@@ -204,6 +204,15 @@ applies and `esc` leaves without changing anything. The active narrowing shows
 in the count line — `mine · failed · 46` — so a short list is never mistaken
 for a small instance.
 
+**A narrowed view is remembered**, in the same file as the pins and keyed the
+same way, per instance and per tab: leave the Jobs tab showing your own failed
+runs and that is how it opens tomorrow, while Templates stays as you left it
+and another instance is unaffected. It is restored before the first request
+goes out, so a saved filter never costs an unnarrowed fetch that is thrown
+away. `c` then `enter` clears it, on disk as well as on screen. Choices are
+saved as plain names, so adding one to the panel later cannot strand what is
+already saved.
+
 Every choice is sent to AWX, not applied to the rows that happen to be
 loaded: `created_by`, `status` and `type` as query parameters, and a
 pinned-only view as one `?id__in=` request. Lists are paged, so filtering what
@@ -287,7 +296,7 @@ playbooks, which a project that has never updated does not have.
 | `internal/ui/table.go` | responsive column layout (columns shrink, then drop) |
 | `internal/ui/pins.go` | pinning, on every tab |
 | `internal/ui/show.go` | the f panel: what a view is narrowed to |
-| `internal/state` | pinned records, kept across restarts |
+| `internal/state` | pins and saved views, kept across restarts |
 | `internal/ui/theme.go` | colours and status badges |
 
 ## Tests

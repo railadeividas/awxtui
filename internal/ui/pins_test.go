@@ -346,6 +346,103 @@ func TestSyncsAreLabelledInTheJobsList(t *testing.T) {
 	}
 }
 
+// A filter is saved where the pins are, and is in force before the first
+// request goes out — restoring it after the list loaded would fetch the
+// unnarrowed list first and then throw it away.
+func TestNarrowingSurvivesARestart(t *testing.T) {
+	srv := mockAWX(t)
+	path := filepath.Join(t.TempDir(), "pins.json")
+	store, err := state.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := onTab(t, srv, tabJobs, WithStore(store))
+	m = setShow(t, m, "mine", "yes")
+	m = setShow(t, m, "status", "successful")
+
+	reopened, err := state.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.View("", state.GroupRuns); got["mine"] != "yes" || got["status"] != "successful" {
+		t.Fatalf("the filter was not written: %v", got)
+	}
+
+	fresh := New(awx.New(srv.URL, "test-token", false), WithStore(reopened))
+	if got := fresh.show[tabJobs]; !got.mine || got.status != "successful" {
+		t.Fatalf("a new model did not restore the filter, got %+v", got)
+	}
+	before := len(srv.unified())
+	fresh = step(t, fresh, tea.WindowSizeMsg{Width: 120, Height: 30})
+	fresh = step(t, fresh, fresh.connect())
+	fresh = step(t, fresh, key("2"))
+	for _, q := range srv.unified()[before:] {
+		if !strings.Contains(q, "created_by=1") || !strings.Contains(q, "status=successful") {
+			t.Errorf("a request went out unnarrowed after restart: %q", q)
+		}
+	}
+	if got := rowIDs(fresh, tabJobs); len(got) == 0 {
+		t.Errorf("restored filter matched nothing (err %v)", fresh.err)
+	}
+	if label := fresh.countLabel(tabJobs); !strings.Contains(label, "mine · successful") {
+		t.Errorf("count label = %q; a restored filter has to be visible, or an empty view looks like an empty instance", label)
+	}
+
+	// Clearing it is saved too, rather than coming back on the next start.
+	fresh = step(t, fresh, key("f"))
+	fresh = step(t, fresh, key("c"))
+	fresh = step(t, fresh, key("enter"))
+	again, err := state.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.View("", state.GroupRuns); len(got) != 0 {
+		t.Errorf("a cleared filter is still on disk: %v", got)
+	}
+}
+
+// Each instance keeps its own narrowing, the way it keeps its own pins: the
+// two AWXes have nothing to do with each other.
+func TestNarrowingIsPerInstanceAndPerTab(t *testing.T) {
+	prod, staging := namedMock(t, "prod", 3), namedMock(t, "staging", 2)
+	path := filepath.Join(t.TempDir(), "pins.json")
+	store, err := state.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := twoInstanceModel(t, prod, staging, WithStore(store))
+	m = setShow(t, m, "pinned", "yes")
+	if !m.show[tabTemplates].pinnedOnly {
+		t.Fatalf("templates should be narrowed to pins")
+	}
+	if m.show[tabJobs].active() {
+		t.Errorf("narrowing the templates tab also narrowed jobs: %+v", m.show[tabJobs])
+	}
+
+	m = step(t, m, key("i"))
+	m = step(t, m, key("down"))
+	m = step(t, m, key("enter"))
+	if m.instance != "staging" {
+		t.Fatalf("expected staging, got %q (err %v)", m.instance, m.err)
+	}
+	if m.show[tabTemplates].active() {
+		t.Errorf("prod's filter followed the switch to staging: %+v", m.show[tabTemplates])
+	}
+
+	// Going back restores it.
+	m = step(t, m, key("i"))
+	m = step(t, m, key("up"))
+	m = step(t, m, key("enter"))
+	if m.instance != "prod" {
+		t.Fatalf("expected prod, got %q", m.instance)
+	}
+	if !m.show[tabTemplates].pinnedOnly {
+		t.Errorf("prod's filter was not restored on the way back: %+v", m.show[tabTemplates])
+	}
+}
+
 // Switching instances rebuilds the model. The store has to come along, or
 // pins quietly stop being written for the rest of the session.
 func TestSwitchingInstanceKeepsThePersistentStore(t *testing.T) {

@@ -1,7 +1,7 @@
 # awxtui
 
 A terminal UI for AWX / Ansible Automation Platform, in Go with Bubble Tea.
-~10800 lines, 109 tests. `go test ./...` runs in under 4 seconds — keep it that way.
+~11100 lines, 112 tests. `go test ./...` runs in under 4 seconds — keep it that way.
 
 ## Safety: the AWX behind AWX_URL is production
 
@@ -32,7 +32,7 @@ instance:
 | `internal/ui/instances.go` | in-app instance switcher |
 | `internal/ui/pins.go` | pinning, on every tab |
 | `internal/ui/show.go` | the `f` panel: what a view is narrowed to |
-| `internal/state` | pinned records, persisted per instance and kind |
+| `internal/state` | pins and per-tab view filters, persisted per instance |
 | `internal/ui/table.go` | responsive columns (shrink, then drop) |
 | `internal/ui/theme.go` | every colour and status badge |
 

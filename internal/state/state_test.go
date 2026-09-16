@@ -126,6 +126,62 @@ func TestPinsAreCapped(t *testing.T) {
 	}
 }
 
+func TestViewsRoundTripAndClear(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pins.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.View("prod", GroupRuns); got != nil {
+		t.Errorf("a group that was never narrowed should read as unnarrowed, got %v", got)
+	}
+	// An empty value is not a choice; it is the absence of one.
+	if err := s.SetView("prod", GroupRuns, map[string]string{"mine": "yes", "status": "failed", "kind": ""}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetView("staging", GroupRuns, map[string]string{"pinned": "yes"}); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := again.View("prod", GroupRuns)
+	if got["mine"] != "yes" || got["status"] != "failed" {
+		t.Errorf("reloaded view = %v", got)
+	}
+	if _, ok := got["kind"]; ok {
+		t.Errorf("an empty choice was saved: %v", got)
+	}
+	if again.View("staging", GroupRuns)["pinned"] != "yes" {
+		t.Errorf("staging's view did not survive")
+	}
+	if again.View("prod", GroupTemplates) != nil {
+		t.Errorf("narrowing the runs list also narrowed the templates list")
+	}
+
+	// A caller cannot reach into the store through what View handed back.
+	got["mine"] = "tampered"
+	if again.View("prod", GroupRuns)["mine"] != "yes" {
+		t.Errorf("View returned the store's own map")
+	}
+
+	if err := again.SetView("prod", GroupRuns, nil); err != nil {
+		t.Fatal(err)
+	}
+	third, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := third.View("prod", GroupRuns); v != nil {
+		t.Errorf("a cleared view came back as %v", v)
+	}
+	if third.View("staging", GroupRuns)["pinned"] != "yes" {
+		t.Errorf("clearing prod's view cleared staging's too")
+	}
+}
+
 func TestRoundTripThroughTheFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "pins.json")
 	s, err := Load(path)
