@@ -191,10 +191,26 @@ func (m Model) listBody() string {
 		return b.String()
 	}
 	h := m.tableHeight()
-	table := renderTable(tabColumns[m.active], rows, m.cursor[m.active], m.offset[m.active], m.width-1, h)
+	offset := m.offset[m.active]
+	// A page arriving while you scroll deserves a word where the eye already
+	// is — at the end of the list. The "⋯" next to the count is too small to
+	// notice, which read as a list that had simply stopped.
+	more := m.fetching[m.active] && len(rows) > 0
+	if more {
+		// The spinner takes the last line; re-clamp so the cursor row does
+		// not scroll out from under it.
+		h--
+		offset = clampOffset(m.cursor[m.active], offset, h, len(rows))
+	}
+	table := renderTable(tabColumns[m.active], rows, m.cursor[m.active], offset, m.width-1, h)
 	b.WriteString(table)
+	lines := countLines(table)
+	if more {
+		b.WriteString("\n  " + m.spin.View() + dimStyle.Render(" loading more "+strings.ToLower(tabNames[m.active])+"…"))
+		lines++
+	}
 	// pad to a stable height so the footer does not jump around
-	b.WriteString(strings.Repeat("\n", max(0, h-countLines(table)+1)))
+	b.WriteString(strings.Repeat("\n", max(0, m.tableHeight()-lines+1)))
 	return b.String()
 }
 

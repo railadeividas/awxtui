@@ -437,3 +437,36 @@ func TestCountLabelReflectsPagingState(t *testing.T) {
 		t.Errorf("searched label = %q, want %q", got, "100 matching")
 	}
 }
+
+// A page arriving mid-scroll says so at the end of the list, not only as a
+// "⋯" beside the count, and the view neither grows nor loses the cursor row.
+func TestLoadingMoreShowsSpinnerInTheList(t *testing.T) {
+	p := newPagedMock(t, 0, 450, 0)
+	m := pagedModel(t, p, 120, 30)
+	m = step(t, m, key("2"))
+	m = step(t, m, key("G")) // to the bottom of what is loaded
+
+	settled := m.View()
+	if strings.Contains(settled, "loading more") {
+		t.Fatalf("idle list claims to be loading:\n%s", settled)
+	}
+
+	// Start a page without draining its command: this is the frame the user
+	// sees while the request is in flight.
+	cursorRow := m.visible(tabJobs)[m.cursor[tabJobs]].cells[0]
+	m.fetching[tabJobs] = false // G may have left a page in flight already
+	_ = m.nextPage(tabJobs)
+	inflight := m.View()
+
+	if !strings.Contains(inflight, "loading more jobs…") {
+		t.Errorf("no in-list loading line while paging:\n%s", inflight)
+	}
+	if got, want := countLines(inflight), countLines(settled); got != want {
+		t.Errorf("view is %d lines while loading, %d when settled", got, want)
+	}
+	if !strings.Contains(inflight, cursorRow) {
+		t.Errorf("cursor row %s scrolled out to make room for the spinner:\n%s",
+			cursorRow, inflight)
+	}
+	show(t, "loading more", inflight)
+}

@@ -335,7 +335,8 @@ that every row they return matches.
 
 Every list is read one page at a time (200 records, 100 for jobs) and pages in
 as you scroll toward the end, so startup costs one request per view no matter
-how large the instance is.
+how large the instance is. While a page is on its way, a spinner and `loading
+more jobs…` sit on the last line of the list, where you are already looking.
 
 Because a lazily loaded list is incomplete, `/` searches **AWX**, not just the
 rows on screen: the query is debounced, sent as `?search=`, and matches
