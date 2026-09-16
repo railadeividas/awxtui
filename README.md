@@ -14,6 +14,8 @@ go build -o awxtui .
 
 ## Configure
 
+The quickest way is the environment:
+
 ```sh
 export AWX_URL=https://awx.example.com   # base URL, no /api/v2
 export AWX_TOKEN=<personal access token> # AWX: Users -> Tokens -> Add
@@ -21,13 +23,44 @@ export AWX_INSECURE=1                    # optional, skip TLS verification
 export AWXTUI_READONLY=1                 # optional, refuse all writes
 ```
 
-`AWXTUI_READONLY=1` pins the API client to GET requests, so nothing can be
-launched or cancelled by accident — useful when pointing at production. The
-header shows a `read-only` badge, launch forms still open for inspection, and
+For more than one AWX, put them in `~/.config/awxtui/config.yml`
+(`$XDG_CONFIG_HOME` is honoured):
+
+```yaml
+default: prod
+
+instances:
+  prod:
+    url: https://awx.example.com
+    token_command: pass show awx/prod   # keeps the secret off disk
+    read_only: true                     # refuse launches and cancels
+  staging:
+    url: https://awx-staging.example.com
+    token: <personal access token>
+    insecure: true                      # skip TLS verification
+```
+
+```sh
+awxtui                      # the default instance
+awxtui -instance staging    # or $AWXTUI_INSTANCE=staging
+awxtui -list                # what is configured
+awxtui -read-only           # refuse writes whatever the config says
+```
+
+An instance is chosen in this order: `-instance`, `$AWXTUI_INSTANCE`,
+`$AWX_URL`+`$AWX_TOKEN`, the file's `default`, or the only one configured. An
+instance with no token falls back to `$AWX_TOKEN`, so the file can hold URLs
+while secrets stay elsewhere. Tokens are unquoted before use, since a value
+copied out of a shell env file usually arrives wrapped in quotes, and awxtui
+warns if a file holding a literal token is readable by anyone else.
+
+`AWXTUI_READONLY=1`, `-read-only` or `read_only: true` pin the API client to
+GET requests, so nothing can be launched or cancelled by accident. The header
+shows a `read-only` badge, launch forms still open for inspection, and
 submitting one is refused.
 
-Create the token in the AWX UI under **Users → your user → Tokens**, scope
-`write` if you want to launch and cancel jobs (`read` is enough for browsing).
+Create tokens in the AWX UI under **Users → your user → Tokens**, scope
+`write` to launch and cancel jobs (`read` is enough for browsing).
 
 ## Run
 
@@ -115,7 +148,8 @@ from `/stdout/`, falling back to events if AWX has no stored stdout.
 
 | Path | What |
 | --- | --- |
-| `main.go` | env config and program start-up |
+| `main.go` | flags and program start-up |
+| `internal/config` | config file, instance selection, token resolution |
 | `internal/awx` | minimal AWX v2 API client |
 | `internal/awx/launch.go` | launch metadata, survey specs, YAML/JSON extra vars |
 | `internal/ui` | Bubble Tea model, key handling, rendering |
@@ -165,6 +199,5 @@ the first page and merging it, so the pages you scrolled through stay put.
 
 ## Not done yet
 
-- A config file with several named instances, instead of env vars.
 - Workflow job templates, schedules and ad-hoc commands.
 - Prompting for instance groups, labels, execution environments, credentials.

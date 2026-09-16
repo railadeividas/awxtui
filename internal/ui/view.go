@@ -68,6 +68,9 @@ func (m Model) rule() string {
 
 func (m Model) headerView() string {
 	left := titleStyle.Render("awxtui")
+	if m.instance != "" {
+		left += "  " + tabActiveStyle.Render(m.instance)
+	}
 	host := m.client.BaseURL()
 	host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
 	who := host

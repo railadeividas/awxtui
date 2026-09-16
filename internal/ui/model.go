@@ -57,8 +57,9 @@ const (
 
 // Model is the whole application state.
 type Model struct {
-	client *awx.Client
-	user   string
+	client   *awx.Client
+	user     string
+	instance string
 
 	width, height int
 	ready         bool
@@ -125,8 +126,21 @@ type Model struct {
 	lastJobsPull time.Time
 }
 
+// Option configures the model at construction.
+type Option func(*Model)
+
+// WithInstance labels the session with the configured instance name, so it is
+// obvious which AWX is on screen.
+func WithInstance(name string) Option {
+	return func(m *Model) {
+		if name != "env" {
+			m.instance = name
+		}
+	}
+}
+
 // New builds the initial model.
-func New(c *awx.Client) Model {
+func New(c *awx.Client, opts ...Option) Model {
 	fi := textinput.New()
 	fi.Prompt = "search "
 	fi.Placeholder = "type to filter…"
@@ -137,7 +151,7 @@ func New(c *awx.Client) Model {
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	sp.Style = helpKeyStyle
 
-	return Model{
+	m := Model{
 		client:      c,
 		mode:        modeList,
 		filterInput: fi,
@@ -145,6 +159,10 @@ func New(c *awx.Client) Model {
 		follow:      true,
 		osearch:     newOutputSearch(),
 	}
+	for _, opt := range opts {
+		opt(&m)
+	}
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
