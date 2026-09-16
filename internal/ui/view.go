@@ -98,10 +98,15 @@ func (m Model) headerView() string {
 	}
 
 	right := ""
-	if m.inflight > 0 {
+	switch {
+	case m.inflight > 0:
 		right = m.spin.View() + metaStyle.Render(" loading")
-	} else if m.user != "" {
+	case m.user != "":
 		right = okStyle.Render("● connected")
+	case m.err == nil:
+		// The very first request, /api/v2/me/, is in flight before there is a
+		// user to name: still busy, so still say so.
+		right = m.spin.View() + metaStyle.Render(" connecting")
 	}
 	return m.spread(left, right)
 }
@@ -185,7 +190,7 @@ func (m Model) listBody() string {
 	var b strings.Builder
 	b.WriteString(m.filterLine(len(rows), len(m.rows[m.active])))
 	b.WriteString("\n")
-	if !m.loaded[m.active] && m.inflight > 0 {
+	if !m.loaded[m.active] && m.err == nil && (m.inflight > 0 || m.user == "") {
 		b.WriteString("\n  " + m.spin.View() + dimStyle.Render(" fetching "+strings.ToLower(tabNames[m.active])+"…"))
 		b.WriteString(strings.Repeat("\n", max(0, m.tableHeight()-1)))
 		return b.String()

@@ -315,7 +315,6 @@ func (m *Model) load(t tab, force bool) tea.Cmd {
 	if m.loaded[t] && !force {
 		return nil
 	}
-	m.inflight++
 	m.pages[t] = 1
 	m.next[t] = ""
 	return m.fetch(t, "", m.filters[t], false)
@@ -369,7 +368,6 @@ func (m *Model) startSync(what string, cmd tea.Cmd) tea.Cmd {
 	m.err = nil
 	m.notice = "syncing " + what + "…"
 	m.syncing = true
-	m.inflight++
 	return cmd
 }
 
@@ -400,6 +398,12 @@ func (m Model) outputHeight() int {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// A tracked reply releases its request before anything else looks at it,
+	// including one about to be dropped as stale.
+	if tracked, ok := msg.(trackedMsg); ok {
+		m.inflight = max(0, m.inflight-1)
+		msg = tracked.inner
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -445,7 +449,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.load(tabTemplates, true)
 
 	case templatesMsg:
-		m.inflight = max(0, m.inflight-1)
 		if msg.gen != m.gen || msg.seq != m.searchSeq[tabTemplates] {
 			return m, nil // a newer search, or another instance, has replaced it
 		}
@@ -464,7 +467,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.continueLoad(tabTemplates)
 
 	case jobsMsg:
-		m.inflight = max(0, m.inflight-1)
 		if msg.gen != m.gen || msg.seq != m.searchSeq[tabJobs] {
 			return m, nil // a newer search, or another instance, has replaced it
 		}
@@ -495,7 +497,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.continueLoad(tabJobs)
 
 	case inventoriesMsg:
-		m.inflight = max(0, m.inflight-1)
 		if msg.gen != m.gen || msg.seq != m.searchSeq[tabInventories] {
 			return m, nil // a newer search, or another instance, has replaced it
 		}
@@ -514,7 +515,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.continueLoad(tabInventories)
 
 	case projectsMsg:
-		m.inflight = max(0, m.inflight-1)
 		if msg.gen != m.gen || msg.seq != m.searchSeq[tabProjects] {
 			return m, nil // a newer search, or another instance, has replaced it
 		}
@@ -533,7 +533,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.continueLoad(tabProjects)
 
 	case playbooksMsg:
-		m.inflight = max(0, m.inflight-1)
 		// A reply for a project no longer on screen belongs to a details view
 		// that has since been closed or replaced.
 		if msg.gen != m.gen || m.mode != modeProject || msg.projectID != m.project.project.ID {
@@ -548,7 +547,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case hostsMsg:
-		m.inflight = max(0, m.inflight-1)
 		if msg.gen != m.gen {
 			return m, nil
 		}
@@ -586,7 +584,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case launchFormMsg:
-		m.inflight = max(0, m.inflight-1)
 		if msg.gen != m.gen {
 			return m, nil
 		}
@@ -596,7 +593,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case launchedMsg:
-		m.inflight = max(0, m.inflight-1)
 		if msg.gen != m.gen {
 			return m, nil
 		}
@@ -613,7 +609,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.fetch(tabJobs, "", m.serverQuery[tabJobs], false)
 
 	case syncedMsg:
-		m.inflight = max(0, m.inflight-1)
 		m.syncing = false
 		if msg.gen != m.gen || len(msg.started) == 0 {
 			return m, nil
@@ -629,7 +624,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.openOutput(job), m.fetch(m.active, "", m.serverQuery[m.active], false))
 
 	case errMsg:
-		m.inflight = max(0, m.inflight-1)
 		if msg.gen != m.gen {
 			return m, nil
 		}
@@ -721,7 +715,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		m.form = form{}
 		m.err = nil
-		m.inflight++
 		return m, m.launch(id, payload)
 
 	case modeHelp, modeError:
@@ -853,7 +846,6 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err, m.notice = nil, "reading launch options…"
-		m.inflight++
 		return m, m.fetchLaunchForm(t)
 
 	case tabJobs:
@@ -877,7 +869,6 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		m.inflight++
 		name := stripANSI(r.cells[0])
 		return m, m.fetchHosts(r.id, name, "", false)
 

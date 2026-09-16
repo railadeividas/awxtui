@@ -30,7 +30,6 @@ func (m *Model) openProject(p awx.Project) tea.Cmd {
 	m.err, m.notice = nil, ""
 	m.mode = modeProject
 	m.project = projectDetail{project: p, loading: true}
-	m.inflight++
 	return m.fetchPlaybooks(p.ID)
 }
 
@@ -76,7 +75,6 @@ func (m Model) handleProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		m.project.loading = true
-		m.inflight++
 		return m, m.fetchPlaybooks(m.project.project.ID)
 	case "s":
 		p := m.project.project

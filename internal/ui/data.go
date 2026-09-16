@@ -109,10 +109,31 @@ type (
 	tickMsg time.Time
 )
 
+// trackedMsg is the reply to a counted request, on its way back to Update.
+// Wrapping it is what pairs the release with the request: the counter goes up
+// in request and comes down in exactly one place, however the reply turned
+// out — a result, an error, or a stale generation that gets dropped.
+type trackedMsg struct{ inner tea.Msg }
+
 func (e errMsg) Error() string { return e.err.Error() }
 
 func cmdCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 30*time.Second)
+}
+
+// request counts cmd as one call to AWX for as long as it takes to answer,
+// and marks its reply so Update can release it again. Every command that
+// talks to AWX is built by a method that goes through here, so the counter
+// cannot be forgotten: it used to be raised by hand at eight of the twenty-odd
+// places that issue a request, which left paging, refreshes, syncs, cancels
+// and output polls all running with the corner badge still reading
+// "connected".
+func (m *Model) request(cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	m.inflight++
+	return func() tea.Msg { return trackedMsg{inner: cmd()} }
 }
 
 func (m Model) connect() tea.Msg {
@@ -128,17 +149,17 @@ func (m Model) connect() tea.Msg {
 // fetch requests one page of a list. An empty pageURL starts at the first
 // page, applying search server-side; cont marks the result as a continuation
 // to append. A page URL already carries the search it belongs to.
-func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
+func (m *Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 	c, gen := m.client, m.gen
 	meta := pageMeta{cont: cont, query: strings.TrimSpace(search), seq: m.searchSeq[t], gen: m.gen}
 	// A pinned-only view is not a page of a list: it is a named set of ids,
 	// read in one request and never paged.
 	if m.show[t].pinnedOnly {
-		return m.fetchPinned(t, meta)
+		return m.request(m.pinnedCmd(t, meta))
 	}
 	switch t {
 	case tabTemplates:
-		return func() tea.Msg {
+		return m.request(func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
 			p, err := c.JobTemplates(ctx, pageURL, search)
@@ -147,13 +168,13 @@ func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return templatesMsg{pageMeta: meta, items: p.Results}
-		}
+		})
 	case tabJobs:
 		// /api/v2/jobs/ holds playbook jobs alone, so a project update or an
 		// inventory sync would be missing from it entirely. The unified list
 		// holds all three and takes the same filters.
 		filter := m.jobFilter()
-		return func() tea.Msg {
+		return m.request(func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
 			p, err := c.UnifiedJobs(ctx, pageURL, search, filter)
@@ -162,9 +183,9 @@ func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return jobsMsg{pageMeta: meta, items: p.Results}
-		}
+		})
 	case tabInventories:
-		return func() tea.Msg {
+		return m.request(func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
 			p, err := c.Inventories(ctx, pageURL, search)
@@ -173,9 +194,9 @@ func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return inventoriesMsg{pageMeta: meta, items: p.Results}
-		}
+		})
 	case tabProjects:
-		return func() tea.Msg {
+		return m.request(func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
 			p, err := c.Projects(ctx, pageURL, search)
@@ -184,7 +205,7 @@ func (m Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return projectsMsg{pageMeta: meta, items: p.Results}
-		}
+		})
 	}
 	return nil
 }
@@ -202,7 +223,7 @@ func (m Model) jobFilter() awx.JobFilter {
 // come from disk, so the list survives a restart; the records come from AWX,
 // so their status is current. Records AWX no longer has come back missing
 // rather than stale, and the count says so.
-func (m Model) fetchPinned(t tab, meta pageMeta) tea.Cmd {
+func (m Model) pinnedCmd(t tab, meta pageMeta) tea.Cmd {
 	c, gen := m.client, m.gen
 	ids := m.store.IDs(m.instance, pinGroup(t))
 	meta.count = len(ids)
@@ -263,19 +284,19 @@ func searchDebounce(t tab, seq int) tea.Cmd {
 	})
 }
 
-func (m Model) fetchPlaybooks(projectID int) tea.Cmd {
+func (m *Model) fetchPlaybooks(projectID int) tea.Cmd {
 	c, gen := m.client, m.gen
-	return func() tea.Msg {
+	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		names, err := c.ProjectPlaybooks(ctx, projectID)
 		return playbooksMsg{gen: gen, projectID: projectID, names: names, err: err}
-	}
+	})
 }
 
-func (m Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.Cmd {
+func (m *Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.Cmd {
 	c, gen := m.client, m.gen
-	return func() tea.Msg {
+	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		p, err := c.Hosts(ctx, inventoryID, pageURL, "")
@@ -286,7 +307,7 @@ func (m Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.
 			pageMeta:  pageMeta{next: p.Next, count: p.Count, cont: cont, gen: gen},
 			inventory: name, inventoryID: inventoryID, hosts: p.Results,
 		}
-	}
+	})
 }
 
 // fetchOutput reads the output of a run. A finished one is fetched whole from
@@ -296,9 +317,9 @@ func (m Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.
 //
 // res says which collection to read: a project update and an inventory sync
 // keep their output under their own endpoints, not under /api/v2/jobs/.
-func (m Model) fetchOutput(res awx.Resource, jobID, after int) tea.Cmd {
+func (m *Model) fetchOutput(res awx.Resource, jobID, after int) tea.Cmd {
 	c, gen := m.client, m.gen
-	return func() tea.Msg {
+	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		job, err := c.UnifiedJob(ctx, res, jobID)
@@ -339,12 +360,12 @@ func (m Model) fetchOutput(res awx.Resource, jobID, after int) tea.Cmd {
 			more:    len(events) == awx.EventPageSize,
 			gen:     gen,
 		}
-	}
+	})
 }
 
-func (m Model) launch(templateID int, payload map[string]any) tea.Cmd {
+func (m *Model) launch(templateID int, payload map[string]any) tea.Cmd {
 	c, gen := m.client, m.gen
-	return func() tea.Msg {
+	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		job, err := c.Launch(ctx, templateID, payload)
@@ -352,15 +373,15 @@ func (m Model) launch(templateID int, payload map[string]any) tea.Cmd {
 			return errMsg{err: err, gen: gen}
 		}
 		return launchedMsg{job: job, gen: gen}
-	}
+	})
 }
 
 // fetchLaunchForm reads what a template needs before it can start: the
 // ask_*_on_launch prompts, its survey, and an inventory list when the template
 // lets the user choose one.
-func (m Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
+func (m *Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 	c, gen := m.client, m.gen
-	return func() tea.Msg {
+	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		cfg, err := c.LaunchConfig(ctx, t.ID)
@@ -395,25 +416,25 @@ func (m Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 			msg.labels, _ = c.AllLabels(ctx, maxPages)
 		}
 		return msg
-	}
+	})
 }
 
-func (m Model) cancelJob(res awx.Resource, jobID int) tea.Cmd {
+func (m *Model) cancelJob(res awx.Resource, jobID int) tea.Cmd {
 	c, gen := m.client, m.gen
-	return func() tea.Msg {
+	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		if err := c.Cancel(ctx, res, jobID); err != nil {
 			return errMsg{err: err, gen: gen}
 		}
 		return canceledMsg{id: jobID, gen: gen}
-	}
+	})
 }
 
 // syncProject starts an SCM update of one project.
-func (m Model) syncProject(p awx.Project) tea.Cmd {
+func (m *Model) syncProject(p awx.Project) tea.Cmd {
 	c, gen := m.client, m.gen
-	return func() tea.Msg {
+	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		job, err := c.UpdateProject(ctx, p.ID)
@@ -421,13 +442,13 @@ func (m Model) syncProject(p awx.Project) tea.Cmd {
 			return errMsg{err: fmt.Errorf("sync project %s: %w", p.Name, err), gen: gen}
 		}
 		return syncedMsg{gen: gen, what: "project " + p.Name, started: []awx.Job{job}}
-	}
+	})
 }
 
 // syncInventory starts a sync of every source of one inventory.
-func (m Model) syncInventory(inv awx.Inventory) tea.Cmd {
+func (m *Model) syncInventory(inv awx.Inventory) tea.Cmd {
 	c, gen := m.client, m.gen
-	return func() tea.Msg {
+	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		started, err := c.SyncInventory(ctx, inv.ID)
@@ -441,7 +462,7 @@ func (m Model) syncInventory(inv awx.Inventory) tea.Cmd {
 			return errMsg{err: wrapped, gen: gen}
 		}
 		return syncedMsg{gen: gen, what: "inventory " + inv.Name, started: started}
-	}
+	})
 }
 
 func tick(d time.Duration) tea.Cmd {

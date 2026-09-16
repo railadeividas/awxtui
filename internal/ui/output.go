@@ -323,7 +323,14 @@ func (m Model) outputView() string {
 	if j.IsSync() {
 		head += "  " + metaStyle.Render(j.KindLabel())
 	}
-	right := statusBadge(j.Status) + metaStyle.Render("  "+duration(j.Elapsed))
+	// This view has its own header, so it needs its own copy of the badge the
+	// list header carries: tailing a run is exactly where a request is most
+	// often in flight.
+	right := ""
+	if m.inflight > 0 {
+		right = m.spin.View() + metaStyle.Render(" loading") + "  "
+	}
+	right += statusBadge(j.Status) + metaStyle.Render("  "+duration(j.Elapsed))
 	if j.IsRunning() {
 		if m.follow {
 			right += okStyle.Render("  ⟳ follow")

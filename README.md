@@ -86,6 +86,12 @@ NAME                     PROJECT      INVENTORY     LAST RUN       WHEN
 ↑↓ move · enter launch · / search · r refresh · ? help · q quit
 ```
 
+The top-right corner reads `● connected` only while nothing is outstanding.
+Any request to AWX — the first page of a list, a refresh, a page loading as
+you scroll, a search, a launch form, output being tailed, a sync — replaces it
+with a spinner and `loading`, and `connecting` covers the round trip before
+AWX has said who you are.
+
 ## Keys
 
 | Key | Action |
