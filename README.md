@@ -4,7 +4,7 @@ A small, modern terminal UI for AWX / Ansible Automation Platform. Browse job
 templates, launch them, and follow job output live — without leaving the shell
 and without `ansible-navigator`'s weight.
 
-Proof of concept: read-only browsing plus launch and cancel.
+Proof of concept: read-only browsing plus launch, cancel and sync.
 
 ## Install
 
@@ -95,6 +95,7 @@ NAME                     PROJECT      INVENTORY     LAST RUN       WHEN
 | `/` | search the current view (`esc` clears) |
 | `i` | switch to another configured instance |
 | `enter` | launch a template · open job output · list inventory hosts · open project details |
+| `s` | sync: SCM update a project · update an inventory's sources |
 | `↑↓` / `tab` | move between fields in the launch form; `←→` pick a choice, `space` toggles a multiselect, `ctrl+s` submits |
 | `c` | cancel a running job |
 | `f` | toggle follow mode in the job output view |
@@ -134,6 +135,44 @@ entry, which sends no key at all.
 Job output follows live while the job runs, and the Jobs list refreshes itself
 every few seconds.
 
+## Syncing projects and inventories
+
+`s` starts a sync and opens its output, so a project that has drifted from its
+branch or an inventory that has not picked up a new host is one keystroke away
+on the list it is already shown on — also from inside a project's details.
+
+The two are different endpoints wearing one name:
+
+- **A project** is updated in place with `POST /api/v2/projects/{id}/update/`,
+  which answers with the `project_update` it started. A project with no SCM
+  type has nothing to pull and AWX refuses the POST with a 405; the refusal is
+  shown rather than swallowed.
+- **An inventory** has no update endpoint of its own. Its hosts come from
+  inventory sources, and each is synced with
+  `POST /api/v2/inventory_sources/{id}/update/`, so syncing an inventory means
+  updating every source it has — what the web UI calls "sync all". The
+  `SOURCES` column says how many there are, so an inventory whose hosts were
+  typed in by hand reads as `—`: nothing to sync, and `s` says so without
+  issuing a request.
+
+`/api/v2/inventories/{id}/update_inventory_sources/` would start every source
+in one request, but it answers with a bespoke per-source status list instead of
+the update records, and an update you cannot address is an update you cannot
+follow. Sources are therefore updated one at a time; if one fails to start, the
+error names it and says how many were already started, and nothing is retried.
+
+**Neither record appears in the Jobs tab** — `/api/v2/jobs/` holds playbook
+jobs alone. A project update and an inventory sync each live in their own
+collection, with their own detail, `/stdout/`, events and `/cancel/` endpoints,
+and their events are served from `/events/` rather than `/job_events/`. The
+output view follows whichever collection the run came from, names it in the
+header (`#12  infra  project update`), and `c` cancels it through its own
+endpoint. Leaving refreshes the list the sync came from, since that is where
+its new status shows.
+
+Syncing is a write: a read-only client refuses it before anything reaches the
+network, and a held-down `s` cannot start the same update twice.
+
 ## Reading job output
 
 `enter` on a job opens its output, which is where most of the time goes on a
@@ -154,9 +193,11 @@ never interfere: highlighting a match keeps the line's own colour. Jumping
 anywhere turns follow mode off, so a running job cannot yank the view back to
 the bottom while you are reading.
 
-Output for a running job is tailed from `job_events` (the same stream the web UI
+Output for a running job is tailed from its events (the same stream the web UI
 renders, available while the job runs); a finished job is fetched in one request
-from `/stdout/`, falling back to events if AWX has no stored stdout.
+from `/stdout/`, falling back to events if AWX has no stored stdout. This works
+the same for a project update or an inventory sync, against that collection's
+own endpoints.
 
 ## Project details
 
@@ -184,6 +225,7 @@ playbooks, which a project that has never updated does not have.
 | `internal/ui/instances.go` | in-app instance switcher |
 | `internal/awx` | minimal AWX v2 API client |
 | `internal/awx/launch.go` | launch metadata, survey specs, YAML/JSON extra vars |
+| `internal/awx/sync.go` | project updates, inventory sources, inventory sync |
 | `internal/ui` | Bubble Tea model, key handling, rendering |
 | `internal/ui/form.go` | launch form: fields, validation, payload building |
 | `internal/ui/output.go` | job output view: find, highlight, failure/task jumps |
@@ -194,8 +236,8 @@ playbooks, which a project that has never updated does not have.
 ## Tests
 
 `go test ./...` drives the whole model against a mock AWX API: connect, filter,
-launch, follow output, drill into inventory hosts, read project details,
-cancel a job, plus a check
+launch, follow output, drill into inventory hosts, read project details, sync a
+project and an inventory's sources, cancel a job, plus a check
 that every view fits inside 80×24, 120×40 and 200×50 terminals.
 
 Set `AWXTUI_SHOW=1` to print the rendered views while testing:
@@ -209,6 +251,11 @@ There is also a live test against a real instance, skipped by default:
 ```sh
 AWXTUI_LIVE=1 go test -v ./internal/ui -run TestLive
 ```
+
+The live tests pin the client to `ReadOnly()`, so they only ever issue GETs
+against a production instance: `TestLiveSyncTargets` checks what a sync *would*
+act on — `can_update` per project, and that each inventory's row agrees with
+its sources endpoint — without starting one.
 
 ## Pagination and search
 

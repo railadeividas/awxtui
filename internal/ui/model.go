@@ -139,6 +139,10 @@ type Model struct {
 	// details of the selected project
 	project projectDetail
 
+	// syncing is set while a sync POST is in flight, so a held-down key
+	// cannot start the same update twice.
+	syncing bool
+
 	notice       string
 	err          error
 	lastJobsPull time.Time
@@ -322,6 +326,38 @@ func (m *Model) searchable(t tab) bool {
 	return m.next[t] != "" || m.serverQuery[t] != ""
 }
 
+// selectedInventory resolves the highlighted row back to its inventory record.
+func (m *Model) selectedInventory() (awx.Inventory, bool) {
+	r, ok := m.selected()
+	if !ok {
+		return awx.Inventory{}, false
+	}
+	for _, inv := range m.inventories {
+		if inv.ID == r.id {
+			return inv, true
+		}
+	}
+	return awx.Inventory{}, false
+}
+
+// startSync begins a project update or an inventory sync. Both are writes, so
+// both are refused outright by a read-only client rather than sent and
+// rejected by AWX.
+func (m *Model) startSync(what string, cmd tea.Cmd) tea.Cmd {
+	if m.client.IsReadOnly() {
+		m.err = fmt.Errorf("read-only mode: syncing is disabled")
+		return nil
+	}
+	if m.syncing {
+		return nil
+	}
+	m.err = nil
+	m.notice = "syncing " + what + "…"
+	m.syncing = true
+	m.inflight++
+	return cmd
+}
+
 func (m *Model) openOutput(job awx.Job) tea.Cmd {
 	m.mode = modeOutput
 	m.outputJob = job
@@ -336,7 +372,7 @@ func (m *Model) openOutput(job awx.Job) tea.Cmd {
 	m.osearch.matches = nil
 	m.osearch.input.SetValue("")
 	m.vp = viewport.New(m.width, m.outputHeight())
-	return m.fetchOutput(job.ID, 0)
+	return m.fetchOutput(job.Resource(), job.ID, 0)
 }
 
 func (m Model) outputHeight() int {
@@ -367,12 +403,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		cmds := []tea.Cmd{tick(pollInterval)}
 		if m.mode == modeOutput && m.outputJob.IsRunning() {
-			cmds = append(cmds, m.fetchOutput(m.outputJob.ID, m.outputCounter))
+			cmds = append(cmds, m.fetchOutput(m.outputJob.Resource(), m.outputJob.ID, m.outputCounter))
 		} else if m.mode == modeOutput && m.outputText == "" && m.outputRetries < maxOutputRetries {
 			// A job that has just finished can report no output for a few
 			// seconds while AWX finishes processing its events.
 			m.outputRetries++
-			cmds = append(cmds, m.fetchOutput(m.outputJob.ID, 0))
+			cmds = append(cmds, m.fetchOutput(m.outputJob.Resource(), m.outputJob.ID, 0))
 		}
 		if m.mode == modeList && m.active == tabJobs && time.Since(m.lastJobsPull) >= jobsAutoRefresh {
 			m.lastJobsPull = time.Now()
@@ -530,7 +566,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Long jobs span many event pages; keep pulling until caught up.
 		if msg.more && m.mode == modeOutput && m.outputPages < maxOutputPages {
 			m.outputPages++
-			return m, m.fetchOutput(m.outputJob.ID, m.outputCounter)
+			return m, m.fetchOutput(m.outputJob.Resource(), m.outputJob.ID, m.outputCounter)
 		}
 		return m, nil
 
@@ -561,11 +597,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = fmt.Sprintf("cancel requested for job #%d", msg.id)
 		return m, m.fetch(tabJobs, "", m.serverQuery[tabJobs], false)
 
+	case syncedMsg:
+		m.inflight = max(0, m.inflight-1)
+		m.syncing = false
+		if msg.gen != m.gen || len(msg.started) == 0 {
+			return m, nil
+		}
+		job := msg.started[0]
+		m.notice = fmt.Sprintf("syncing %s (#%d)", msg.what, job.ID)
+		if len(msg.started) > 1 {
+			// Every source was started; only one output can be on screen.
+			m.notice = fmt.Sprintf("syncing %s: %d sources, showing #%d",
+				msg.what, len(msg.started), job.ID)
+		}
+		// The list the sync came from now has a running update on it.
+		return m, tea.Batch(m.openOutput(job), m.fetch(m.active, "", m.serverQuery[m.active], false))
+
 	case errMsg:
 		m.inflight = max(0, m.inflight-1)
 		if msg.gen != m.gen {
 			return m, nil
 		}
+		m.syncing = false
 		m.err = msg.err
 		return m, nil
 
@@ -746,6 +799,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.load(m.active, true)
 	case "enter":
 		return m.activate()
+	case "s":
+		return m.sync()
 	case "c":
 		if m.active == tabJobs {
 			if j, ok := m.selectedJob(); ok && j.IsRunning() {
@@ -753,7 +808,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.err = fmt.Errorf("read-only mode: cancelling is disabled")
 					return m, nil
 				}
-				return m, m.cancelJob(j.ID)
+				return m, m.cancelJob(j.Resource(), j.ID)
 			}
 		}
 	}
@@ -801,6 +856,34 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.openProject(p)
+	}
+	return m, nil
+}
+
+// sync handles the sync key for the current tab: an SCM update for the
+// selected project, a source sync for the selected inventory. The other tabs
+// have nothing to sync.
+func (m Model) sync() (tea.Model, tea.Cmd) {
+	switch m.active {
+	case tabProjects:
+		p, ok := m.selectedProject()
+		if !ok {
+			return m, nil
+		}
+		return m, m.startSync("project "+p.Name, m.syncProject(p))
+
+	case tabInventories:
+		inv, ok := m.selectedInventory()
+		if !ok {
+			return m, nil
+		}
+		// AWX would answer the same way, but saying it here saves a request
+		// and names the reason the row shows no sources.
+		if inv.TotalInventorySources == 0 {
+			m.err = fmt.Errorf("inventory %s has no sources to sync", inv.Name)
+			return m, nil
+		}
+		return m, m.startSync("inventory "+inv.Name, m.syncInventory(inv))
 	}
 	return m, nil
 }

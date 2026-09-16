@@ -94,6 +94,14 @@ type (
 		id  int
 		gen int
 	}
+	// syncedMsg reports that a project update or inventory sync has started.
+	// An inventory with several sources starts one update per source, so
+	// started holds them all; the first is the one whose output opens.
+	syncedMsg struct {
+		gen     int
+		what    string
+		started []awx.Job
+	}
 	errMsg struct {
 		err error
 		gen int
@@ -205,31 +213,34 @@ func (m Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.
 	}
 }
 
-// fetchOutput reads job output. A finished job is fetched whole from the
-// /stdout/ endpoint in one request; a running job is tailed through
-// job_events, which — unlike /stdout/ — is populated while it runs. Passing
+// fetchOutput reads the output of a run. A finished one is fetched whole from
+// the /stdout/ endpoint in one request; a running one is tailed through its
+// events, which — unlike /stdout/ — are populated while it runs. Passing
 // after > 0 fetches only the events newer than that counter.
-func (m Model) fetchOutput(jobID, after int) tea.Cmd {
+//
+// res says which collection to read: a project update and an inventory sync
+// keep their output under their own endpoints, not under /api/v2/jobs/.
+func (m Model) fetchOutput(res awx.Resource, jobID, after int) tea.Cmd {
 	c, gen := m.client, m.gen
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
-		job, err := c.Job(ctx, jobID)
+		job, err := c.UnifiedJob(ctx, res, jobID)
 		if err != nil {
 			return errMsg{err: err, gen: gen}
 		}
 
 		if after == 0 && !job.IsRunning() {
-			text, err := c.Stdout(ctx, jobID)
+			text, err := c.Stdout(ctx, res, jobID)
 			switch {
 			case err == nil && strings.TrimSpace(text) != "":
 				return outputMsg{job: job, chunk: text, reset: true, gen: gen}
 			case err != nil && !errors.Is(err, awx.ErrStdoutNotReady):
-				// Fall through to job_events, which may still have the output.
+				// Fall through to the events, which may still have the output.
 			}
 		}
 
-		events, err := c.JobEvents(ctx, jobID, after)
+		events, err := c.JobEvents(ctx, res, jobID, after)
 		if err != nil {
 			return errMsg{err: err, gen: gen}
 		}
@@ -311,15 +322,49 @@ func (m Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 	}
 }
 
-func (m Model) cancelJob(jobID int) tea.Cmd {
+func (m Model) cancelJob(res awx.Resource, jobID int) tea.Cmd {
 	c, gen := m.client, m.gen
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
-		if err := c.Cancel(ctx, jobID); err != nil {
+		if err := c.Cancel(ctx, res, jobID); err != nil {
 			return errMsg{err: err, gen: gen}
 		}
 		return canceledMsg{id: jobID, gen: gen}
+	}
+}
+
+// syncProject starts an SCM update of one project.
+func (m Model) syncProject(p awx.Project) tea.Cmd {
+	c, gen := m.client, m.gen
+	return func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		job, err := c.UpdateProject(ctx, p.ID)
+		if err != nil {
+			return errMsg{err: fmt.Errorf("sync project %s: %w", p.Name, err), gen: gen}
+		}
+		return syncedMsg{gen: gen, what: "project " + p.Name, started: []awx.Job{job}}
+	}
+}
+
+// syncInventory starts a sync of every source of one inventory.
+func (m Model) syncInventory(inv awx.Inventory) tea.Cmd {
+	c, gen := m.client, m.gen
+	return func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		started, err := c.SyncInventory(ctx, inv.ID)
+		if err != nil {
+			// Some sources may already have started before one failed; say so
+			// rather than implying nothing happened.
+			wrapped := fmt.Errorf("sync inventory %s: %w", inv.Name, err)
+			if len(started) > 0 {
+				wrapped = fmt.Errorf("%w (%d source(s) already started)", wrapped, len(started))
+			}
+			return errMsg{err: wrapped, gen: gen}
+		}
+		return syncedMsg{gen: gen, what: "inventory " + inv.Name, started: started}
 	}
 }
 
@@ -392,11 +437,26 @@ func inventoryRows(items []awx.Inventory) []row {
 				dimStyle.Render(fmt.Sprintf("%d", inv.TotalHosts)),
 				dimStyle.Render(fmt.Sprintf("%d", inv.TotalGroups)),
 				health,
+				inventorySourceCell(inv),
 			},
 			search: strings.ToLower(inv.Name + " " + inv.SummaryFields.Organization.Name),
 		})
 	}
 	return rows
+}
+
+// inventorySourceCell shows how many sources a sync would update, so that an
+// inventory whose hosts were entered by hand reads as "nothing to sync"
+// rather than as a sync that did nothing.
+func inventorySourceCell(inv awx.Inventory) string {
+	if inv.TotalInventorySources == 0 {
+		return dimStyle.Render("—")
+	}
+	n := fmt.Sprintf("%d", inv.TotalInventorySources)
+	if inv.InventorySourcesWithFailure > 0 {
+		return errStyle.Render(n + " ✗")
+	}
+	return dimStyle.Render(n)
 }
 
 func projectRows(items []awx.Project) []row {

@@ -288,9 +288,12 @@ func (c *Client) JobTemplates(ctx context.Context, pageURL, search string) (Page
 	return listPage[JobTemplate](ctx, c, firstOr(pageURL, listURL("/api/v2/job_templates/", "name", PageSize, search)))
 }
 
-// Job is a single (running or finished) job run.
+// Job is a single (running or finished) run of something: a playbook job, a
+// project SCM update or an inventory sync. AWX serialises all three with the
+// same core fields and tells them apart with Type.
 type Job struct {
 	ID            int        `json:"id"`
+	Type          string     `json:"type"`
 	Name          string     `json:"name"`
 	Status        string     `json:"status"`
 	Failed        bool       `json:"failed"`
@@ -307,6 +310,58 @@ type Job struct {
 		} `json:"inventory"`
 	} `json:"summary_fields"`
 }
+
+// Resource is the API collection a run lives in. AWX keeps playbook jobs,
+// project updates and inventory syncs in three separate collections, each with
+// its own detail, stdout, events and cancel endpoints, and the /api/v2/jobs/
+// list holds playbook jobs alone. Reading the output of a sync therefore means
+// asking a different collection, not the same one with a different id.
+type Resource string
+
+const (
+	ResourceJobs             Resource = "jobs"
+	ResourceProjectUpdates   Resource = "project_updates"
+	ResourceInventoryUpdates Resource = "inventory_updates"
+)
+
+// eventsPath is the events sub-resource of a collection. Playbook jobs call it
+// job_events; both kinds of update call it events.
+func (r Resource) eventsPath() string {
+	if r == ResourceJobs {
+		return "job_events"
+	}
+	return "events"
+}
+
+// recordType is the value AWX puts in the "type" field of a record from this
+// collection. The two are not the same word: /api/v2/project_updates/ serves
+// records of type "project_update".
+func (r Resource) recordType() string {
+	switch r {
+	case ResourceProjectUpdates:
+		return "project_update"
+	case ResourceInventoryUpdates:
+		return "inventory_update"
+	default:
+		return "job"
+	}
+}
+
+// Resource reports which collection this record belongs to, from the type AWX
+// puts in the record itself. An unknown or missing type falls back to jobs,
+// which is what every record served from /api/v2/jobs/ is.
+func (j Job) Resource() Resource {
+	for _, r := range []Resource{ResourceProjectUpdates, ResourceInventoryUpdates} {
+		if j.Type == r.recordType() {
+			return r
+		}
+	}
+	return ResourceJobs
+}
+
+// IsSync reports whether this run is a project update or an inventory sync
+// rather than a playbook job.
+func (j Job) IsSync() bool { return j.Resource() != ResourceJobs }
 
 // IsRunning reports whether the job may still produce output.
 func (j Job) IsRunning() bool {
@@ -326,9 +381,17 @@ func (c *Client) Jobs(ctx context.Context, pageURL, search string) (Page[Job], e
 // so they are paged in on demand rather than read whole.
 const jobsPageSize = 100
 
-func (c *Client) Job(ctx context.Context, id int) (Job, error) {
+// UnifiedJob re-reads one run of any kind, for the status and elapsed time a
+// list row goes stale on.
+func (c *Client) UnifiedJob(ctx context.Context, res Resource, id int) (Job, error) {
 	var j Job
-	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v2/jobs/%d/", id), nil, &j)
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v2/%s/%d/", res, id), nil, &j)
+	// Real AWX always states the type; falling back to the collection we
+	// asked about keeps a refreshed record pointing at its own output
+	// endpoints rather than silently reverting to /api/v2/jobs/.
+	if j.Type == "" {
+		j.Type = res.recordType()
+	}
 	return j, err
 }
 
@@ -340,7 +403,11 @@ type Inventory struct {
 	TotalHosts              int    `json:"total_hosts"`
 	TotalGroups             int    `json:"total_groups"`
 	HostsWithActiveFailures int    `json:"hosts_with_active_failures"`
-	SummaryFields           struct {
+	// Sources are what a sync updates. An inventory whose hosts are entered
+	// by hand has none, and nothing to sync.
+	TotalInventorySources       int `json:"total_inventory_sources"`
+	InventorySourcesWithFailure int `json:"inventory_sources_with_failures"`
+	SummaryFields               struct {
 		Organization struct {
 			Name string `json:"name"`
 		} `json:"organization"`
@@ -535,9 +602,9 @@ func (c *Client) Hosts(ctx context.Context, inventoryID int, pageURL, search str
 		listURL(fmt.Sprintf("/api/v2/inventories/%d/hosts/", inventoryID), "name", PageSize, search)))
 }
 
-// Cancel requests cancellation of a running job.
-func (c *Client) Cancel(ctx context.Context, jobID int) error {
-	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v2/jobs/%d/cancel/", jobID), strings.NewReader("{}"), nil)
+// Cancel requests cancellation of a running job, project update or sync.
+func (c *Client) Cancel(ctx context.Context, res Resource, id int) error {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v2/%s/%d/cancel/", res, id), strings.NewReader("{}"), nil)
 }
 
 // ErrStdoutNotReady is returned when AWX accepts the stdout request but has
@@ -545,38 +612,40 @@ func (c *Client) Cancel(ctx context.Context, jobID int) error {
 // jobs that are still running; read JobEvents instead.
 var ErrStdoutNotReady = errors.New("job stdout is not ready yet")
 
-// Stdout returns the whole job output as ANSI-coloured text. AWX only serves
-// this reliably once a job has finished and its events are processed.
-func (c *Client) Stdout(ctx context.Context, jobID int) (string, error) {
+// Stdout returns the whole output of a run as ANSI-coloured text. AWX only
+// serves this reliably once a run has finished and its events are processed.
+func (c *Client) Stdout(ctx context.Context, res Resource, id int) (string, error) {
 	q := url.Values{"format": {"ansi"}}
-	path := fmt.Sprintf("/api/v2/jobs/%d/stdout/?%s", jobID, q.Encode())
+	path := fmt.Sprintf("/api/v2/%s/%d/stdout/?%s", res, id, q.Encode())
 	req, err := c.request(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Accept", "text/plain")
-	res, err := c.send(req, nil)
+	resp, err := c.send(req, nil)
 	if err != nil {
 		return "", c.redactErr(err)
 	}
-	defer res.Body.Close()
-	if res.StatusCode == http.StatusAccepted {
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusAccepted {
 		return "", ErrStdoutNotReady
 	}
-	if res.StatusCode >= 400 {
-		msg, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return "", c.redactErr(fmt.Errorf("GET %s: %s: %s",
-			path, res.Status, strings.TrimSpace(string(msg))))
+			path, resp.Status, strings.TrimSpace(string(msg))))
 	}
-	raw, err := io.ReadAll(res.Body)
+	raw, err := io.ReadAll(resp.Body)
 	return string(raw), err
 }
 
 // EventPageSize is how many job events are fetched per request.
 const EventPageSize = 200
 
-// JobEvent is one entry of a job's output stream. This is the same data the
-// AWX web UI renders, and unlike /stdout/ it is available while a job runs.
+// JobEvent is one entry of a run's output stream. This is the same data the
+// AWX web UI renders, and unlike /stdout/ it is available while a run is in
+// progress. Playbook jobs, project updates and inventory syncs each serve
+// their own events, in the same shape.
 type JobEvent struct {
 	Counter   int    `json:"counter"`
 	Stdout    string `json:"stdout"`
@@ -585,9 +654,9 @@ type JobEvent struct {
 }
 
 // JobEvents returns up to EventPageSize events with a counter above after,
-// oldest first, along with the highest counter seen.
-func (c *Client) JobEvents(ctx context.Context, jobID, after int) ([]JobEvent, error) {
-	path := fmt.Sprintf("/api/v2/jobs/%d/job_events/?order_by=counter&page_size=%d&counter__gt=%d",
-		jobID, EventPageSize, after)
+// oldest first.
+func (c *Client) JobEvents(ctx context.Context, res Resource, id, after int) ([]JobEvent, error) {
+	path := fmt.Sprintf("/api/v2/%s/%d/%s/?order_by=counter&page_size=%d&counter__gt=%d",
+		res, id, res.eventsPath(), EventPageSize, after)
 	return list[JobEvent](ctx, c, path)
 }

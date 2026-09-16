@@ -78,6 +78,17 @@ func (m Model) handleProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.project.loading = true
 		m.inflight++
 		return m, m.fetchPlaybooks(m.project.project.ID)
+	case "s":
+		p := m.project.project
+		cmd := m.startSync("project "+p.Name, m.syncProject(p))
+		if cmd == nil {
+			return m, nil
+		}
+		// The update's output replaces the details, which are about to be
+		// out of date anyway.
+		m.mode = modeList
+		m.project = projectDetail{}
+		return m, cmd
 	case "?":
 		m.mode = modeHelp
 		return m, nil
@@ -116,7 +127,7 @@ func (m Model) projectModal() string {
 	b.WriteString("\n\n")
 	b.WriteString(strings.Join(lines[off:end], "\n"))
 	b.WriteString("\n\n")
-	keys := [][2]string{{"esc", "close"}, {"r", "reload playbooks"}}
+	keys := [][2]string{{"esc", "close"}, {"s", "sync"}, {"r", "reload playbooks"}}
 	if len(lines) > window {
 		keys = append([][2]string{{"↑↓", "scroll"}}, keys...)
 	}

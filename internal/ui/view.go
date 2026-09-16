@@ -21,7 +21,7 @@ func stripANSI(s string) string { return ansi.Strip(s) }
 var tabColumns = map[tab][]col{
 	tabTemplates:   {{title: "name", width: 0}, {title: "project", width: 22}, {title: "inventory", width: 20}, {title: "last run", width: 14}, {title: "when", width: 11}},
 	tabJobs:        {{title: "id", width: 7}, {title: "name", width: 0}, {title: "status", width: 13}, {title: "elapsed", width: 9}, {title: "started", width: 11}, {title: "by", width: 14}},
-	tabInventories: {{title: "name", width: 0}, {title: "organization", width: 22}, {title: "hosts", width: 7}, {title: "groups", width: 7}, {title: "health", width: 14}},
+	tabInventories: {{title: "name", width: 0}, {title: "organization", width: 22}, {title: "hosts", width: 7}, {title: "groups", width: 7}, {title: "health", width: 14}, {title: "sources", width: 9}},
 	tabProjects:    {{title: "name", width: 0}, {title: "scm", width: 10}, {title: "branch", width: 18}, {title: "status", width: 14}, {title: "updated", width: 11}},
 }
 
@@ -437,6 +437,7 @@ func (m Model) helpModal() string {
 		{"↑↓ j k", "move  ·  ctrl+d ctrl+u half page  ·  g G top bottom"},
 		{"/", "search (esc clears)"},
 		{"enter", "launch · open job output · list inventory hosts · project details"},
+		{"s", "sync: SCM update a project · update an inventory's sources"},
 		{"c", "cancel a running job"},
 		{"f", "follow job output"},
 		{"n / N", "next · previous search hit in output"},
@@ -459,7 +460,7 @@ func (m Model) statusView() string {
 	case modeHosts:
 		keys = [][2]string{{"↑↓", "move"}, {"esc", "back"}, {"?", "help"}, {"q", "quit"}}
 	case modeProject:
-		keys = [][2]string{{"↑↓", "scroll"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}}
+		keys = [][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}}
 	case modeFilter:
 		keys = [][2]string{{"type", "to filter"}, {"enter", "keep"}, {"esc", "clear"}}
 	default:
@@ -472,7 +473,11 @@ func (m Model) statusView() string {
 		case tabProjects:
 			action = "details"
 		}
-		keys = [][2]string{{"↑↓", "move"}, {"enter", action}, {"/", "search"}, {"r", "refresh"}}
+		keys = [][2]string{{"↑↓", "move"}, {"enter", action}}
+		if m.active == tabProjects || m.active == tabInventories {
+			keys = append(keys, [2]string{"s", "sync"})
+		}
+		keys = append(keys, [2]string{"/", "search"}, [2]string{"r", "refresh"})
 		if len(m.instances) > 1 {
 			keys = append(keys, [2]string{"i", "instance"})
 		}

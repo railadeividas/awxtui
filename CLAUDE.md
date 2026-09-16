@@ -23,6 +23,7 @@ instance:
 | `main.go` | flags, config resolution, program start-up |
 | `internal/config` | config file, instance selection, token resolution |
 | `internal/awx` | API client: lists, paging, launch metadata, retry, redaction |
+| `internal/awx/sync.go` | project updates, inventory sources, inventory sync |
 | `internal/ui/model.go` | state, key handling, the `Update` switch |
 | `internal/ui/data.go` | `tea.Cmd` constructors and the messages they return |
 | `internal/ui/view.go` | rendering, help, status bar, modals |
@@ -39,7 +40,9 @@ instance:
    comes back before writing code. Past examples: `/stdout/?format=ansi`
    answers 406 when `Accept: application/json` is sent, and 202 with an empty
    body while a job runs; survey `choices` arrive as a newline-separated
-   string, not a list.
+   string, not a list; a project update and an inventory sync are separate
+   collections from `/api/v2/jobs/` and serve their events from `/events/`,
+   not `/job_events/`.
 2. **Client layer first** (`internal/awx`): a typed method returning typed
    results. Paged endpoints take `(ctx, pageURL, search)` and return
    `Page[T]`.

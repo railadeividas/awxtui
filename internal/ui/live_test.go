@@ -245,6 +245,69 @@ func TestLiveLaunchForm(t *testing.T) {
 	}
 }
 
+// TestLiveSyncTargets checks what a sync would act on, without starting one.
+// The client is read-only, so every call here is a GET: the project update
+// endpoint answers can_update to a GET and only starts an update on a POST,
+// and an inventory's sources are read before any of them is touched.
+//
+//	AWXTUI_LIVE=1 go test -v ./internal/ui -run TestLiveSyncTargets
+func TestLiveSyncTargets(t *testing.T) {
+	if os.Getenv("AWXTUI_LIVE") == "" {
+		t.Skip("set AWXTUI_LIVE=1 to run against a real AWX instance")
+	}
+	url, token := os.Getenv("AWX_URL"), os.Getenv("AWX_TOKEN")
+	if url == "" || token == "" {
+		t.Skip("AWX_URL and AWX_TOKEN must be set")
+	}
+
+	client := awx.New(url, token, os.Getenv("AWX_INSECURE") != "").ReadOnly()
+	m := New(client)
+	m = step(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = step(t, m, m.connect())
+	if m.err != nil {
+		t.Fatalf("connect failed: %v", m.err)
+	}
+	ctx, cancel := cmdCtx()
+	defer cancel()
+
+	m = step(t, m, key("4"))
+	for _, p := range m.projects {
+		can, err := client.CanUpdate(ctx, p.ID)
+		if err != nil {
+			t.Errorf("%s (#%d): can_update failed: %v", p.Name, p.ID, err)
+			continue
+		}
+		t.Logf("project %s (#%d): %s, can_update=%v", p.Name, p.ID, p.SCMTypeLabel(), can)
+		// A project with no source control has nothing to pull, and AWX
+		// refuses to update it; anything with an SCM type should be updatable
+		// unless one of its updates is already running.
+		if p.SCMType == "" && can {
+			t.Errorf("%s has no SCM type but AWX says it can be updated", p.Name)
+		}
+	}
+
+	m = step(t, m, key("3"))
+	for _, inv := range m.inventories {
+		page, err := client.InventorySources(ctx, inv.ID, "", "")
+		if err != nil {
+			t.Errorf("%s (#%d): listing sources failed: %v", inv.Name, inv.ID, err)
+			continue
+		}
+		// total_inventory_sources on the list row is what the sources column
+		// shows and what the sync key checks before it writes anything, so it
+		// has to agree with the sources themselves.
+		if page.Count != inv.TotalInventorySources {
+			t.Errorf("%s: row claims %d sources, the endpoint reports %d",
+				inv.Name, inv.TotalInventorySources, page.Count)
+		}
+		for _, src := range page.Results {
+			t.Logf("inventory %s (#%d) source #%d: %s, status %s",
+				inv.Name, inv.ID, src.ID, src.Label(), src.Status)
+		}
+	}
+	show(t, "live inventories with sources", m.View())
+}
+
 // TestLiveProjectDetails opens the details of every real project. The client
 // is read-only, so this only ever issues GETs.
 //

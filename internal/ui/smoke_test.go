@@ -18,11 +18,20 @@ import (
 	"github.com/railadeividas/awxtui/internal/awx"
 )
 
-// mock is a fake AWX instance that also records what was launched.
+// mock is a fake AWX instance that also records what was launched and every
+// path it was asked to change.
 type mock struct {
 	*httptest.Server
 	mu       sync.Mutex
 	launches []map[string]any
+	posts    []string
+}
+
+// postedTo reports the paths the model POSTed to, in order.
+func (m *mock) postedTo() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.posts...)
 }
 
 func (m *mock) lastLaunch() map[string]any {
@@ -269,11 +278,18 @@ func mockAWX(t *testing.T) *mock {
 		))
 	})
 	mux.HandleFunc("/api/v2/inventories/", func(w http.ResponseWriter, r *http.Request) {
-		write(w, page(map[string]any{
+		write(w, page(searched(r, []any{map[string]any{
 			"id": 3, "name": "production", "total_hosts": 12, "total_groups": 4,
 			"hosts_with_active_failures": 1,
-			"summary_fields":             map[string]any{"organization": map[string]any{"name": "Default"}},
-		}))
+			// Two sources, so a sync has to start both and not just the first.
+			"total_inventory_sources": 2, "has_inventory_sources": true,
+			"summary_fields": map[string]any{"organization": map[string]any{"name": "Default"}},
+		}, map[string]any{
+			// Hosts entered by hand: there is nothing here to sync.
+			"id": 4, "name": "handmade", "total_hosts": 2, "total_groups": 0,
+			"total_inventory_sources": 0, "has_inventory_sources": false,
+			"summary_fields": map[string]any{"organization": map[string]any{"name": "Default"}},
+		}})...))
 	})
 	mux.HandleFunc("/api/v2/inventories/3/hosts/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, page(
@@ -316,7 +332,113 @@ func mockAWX(t *testing.T) *mock {
 	mux.HandleFunc("/api/v2/projects/6/playbooks/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, []string{})
 	})
-	mk.Server = httptest.NewServer(mux)
+
+	// ---- syncing ----
+	//
+	// A project update and an inventory sync are separate collections from
+	// /api/v2/jobs/, with their own detail, stdout, events and cancel
+	// endpoints. Their events live under /events/, not /job_events/.
+	update := func(id int, kind string, name string) map[string]any {
+		return map[string]any{
+			"id": id, "type": kind, "name": name, "status": "running",
+			"started": now.Add(-2 * time.Second), "elapsed": 2.0,
+			"summary_fields": map[string]any{"created_by": map[string]any{"username": "admin"}},
+		}
+	}
+	mux.HandleFunc("/api/v2/projects/5/update/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			write(w, map[string]any{"can_update": true})
+			return
+		}
+		write(w, update(12, "project_update", "infra"))
+	})
+	// A manual project cannot be updated, and AWX refuses the POST outright
+	// rather than answering with an update that will never run.
+	mux.HandleFunc("/api/v2/projects/6/update/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			write(w, map[string]any{"can_update": false})
+			return
+		}
+		http.Error(w, `{"detail":"Method \"POST\" not allowed."}`, http.StatusMethodNotAllowed)
+	})
+	mux.HandleFunc("/api/v2/project_updates/12/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, update(12, "project_update", "infra"))
+	})
+	mux.HandleFunc("/api/v2/project_updates/12/stdout/", func(w http.ResponseWriter, r *http.Request) {
+		// Still running, so there is no collated stdout yet.
+		w.WriteHeader(http.StatusAccepted)
+	})
+	mux.HandleFunc("/api/v2/project_updates/12/events/", func(w http.ResponseWriter, r *http.Request) {
+		after, _ := strconv.Atoi(r.URL.Query().Get("counter__gt"))
+		var results []any
+		for i, line := range []string{
+			"PLAY [Update source tree if necessary] ****",
+			"TASK [Update project using git] ****",
+			"changed: [localhost]",
+		} {
+			if counter := i + 1; counter > after {
+				results = append(results, map[string]any{
+					"counter": counter, "stdout": line,
+					"start_line": counter, "end_line": counter,
+				})
+			}
+		}
+		write(w, page(results...))
+	})
+	mux.HandleFunc("/api/v2/project_updates/12/cancel/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	})
+	source := func(id int, name, path string) any {
+		return map[string]any{
+			"id": id, "name": name, "source": "scm", "source_path": path,
+			"status": "successful", "update_on_launch": true,
+			"summary_fields": map[string]any{"source_project": map[string]any{"name": "infra"}},
+		}
+	}
+	mux.HandleFunc("/api/v2/inventories/3/inventory_sources/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, page(source(10, "git", "inventories/prod.yml"), source(11, "git", "inventories/edge.yml")))
+	})
+	mux.HandleFunc("/api/v2/inventories/4/inventory_sources/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, page())
+	})
+	for sourceID, updateID := range map[int]int{10: 21, 11: 22} {
+		id := updateID
+		mux.HandleFunc(fmt.Sprintf("/api/v2/inventory_sources/%d/update/", sourceID),
+			func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					write(w, map[string]any{"can_update": true})
+					return
+				}
+				write(w, update(id, "inventory_update", "production - git"))
+			})
+	}
+	mux.HandleFunc("/api/v2/inventory_updates/21/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, update(21, "inventory_update", "production - git"))
+	})
+	mux.HandleFunc("/api/v2/inventory_updates/21/stdout/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	})
+	mux.HandleFunc("/api/v2/inventory_updates/21/events/", func(w http.ResponseWriter, r *http.Request) {
+		after, _ := strconv.Atoi(r.URL.Query().Get("counter__gt"))
+		var results []any
+		if after < 1 {
+			results = append(results, map[string]any{
+				"counter": 1, "stdout": "Updating inventory 0: production",
+				"start_line": 0, "end_line": 1,
+			})
+		}
+		write(w, page(results...))
+	})
+	// Every write is recorded, so a test can assert both what was changed and
+	// that nothing was.
+	mk.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			mk.mu.Lock()
+			mk.posts = append(mk.posts, r.Method+" "+r.URL.Path)
+			mk.mu.Unlock()
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(mk.Close)
 	return mk
 }

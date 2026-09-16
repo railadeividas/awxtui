@@ -238,6 +238,11 @@ func (m Model) handleOutputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.mode = modeList
+		// A sync never shows up in the Jobs tab; what its status changed is
+		// the list it was started from.
+		if m.outputJob.IsSync() {
+			return m, m.fetch(m.active, "", m.serverQuery[m.active], false)
+		}
 		return m, tea.Batch(m.fetch(tabJobs, "", m.serverQuery[tabJobs], false))
 	case "/":
 		m.osearch.editing = true
@@ -275,14 +280,14 @@ func (m Model) handleOutputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		m.err = nil
-		return m, m.fetchOutput(m.outputJob.ID, 0)
+		return m, m.fetchOutput(m.outputJob.Resource(), m.outputJob.ID, 0)
 	case "c":
 		if m.outputJob.IsRunning() {
 			if m.client.IsReadOnly() {
 				m.err = fmt.Errorf("read-only mode: cancelling is disabled")
 				return m, nil
 			}
-			return m, m.cancelJob(m.outputJob.ID)
+			return m, m.cancelJob(m.outputJob.Resource(), m.outputJob.ID)
 		}
 		return m, nil
 	case "g":
@@ -309,6 +314,11 @@ func (m Model) handleOutputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) outputView() string {
 	j := m.outputJob
 	head := titleStyle.Render(fmt.Sprintf("#%d", j.ID)) + "  " + rowStyle.Render(j.Name)
+	// A sync's id belongs to its own collection, so #12 can be both a job and
+	// a project update; say which this is.
+	if j.IsSync() {
+		head += "  " + metaStyle.Render(j.KindLabel())
+	}
 	right := statusBadge(j.Status) + metaStyle.Render("  "+duration(j.Elapsed))
 	if j.IsRunning() {
 		if m.follow {
