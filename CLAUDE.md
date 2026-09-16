@@ -1,7 +1,7 @@
 # awxtui
 
 A terminal UI for AWX / Ansible Automation Platform, in Go with Bubble Tea.
-~11100 lines, 112 tests. `go test ./...` runs in under 4 seconds — keep it that way.
+~11200 lines, 113 tests. `go test ./...` runs in under 4 seconds — keep it that way.
 
 ## Safety: the AWX behind AWX_URL is production
 

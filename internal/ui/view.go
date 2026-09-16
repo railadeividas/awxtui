@@ -465,42 +465,59 @@ func (m Model) helpModal() string {
 }
 
 func (m Model) statusView() string {
-	var keys [][2]string
+	var keys []legend
 	switch m.mode {
 	case modeHosts:
-		keys = [][2]string{{"↑↓", "move"}, {"esc", "back"}, {"?", "help"}, {"q", "quit"}}
+		keys = plainKeys([][2]string{{"↑↓", "move"}, {"esc", "back"}, {"?", "help"}, {"q", "quit"}})
 	case modeProject:
-		keys = [][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}}
+		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
 	case modeFilter:
-		keys = [][2]string{{"type", "to filter"}, {"enter", "keep"}, {"esc", "clear"}}
+		keys = plainKeys([][2]string{{"type", "to filter"}, {"enter", "keep"}, {"esc", "clear"}})
 	case modeShow:
-		keys = [][2]string{{"↑↓", "choose"}, {"←→", "set"}, {"c", "clear"},
-			{"enter", "apply"}, {"esc", "cancel"}}
+		keys = plainKeys([][2]string{{"↑↓", "choose"}, {"←→", "set"}, {"c", "clear"},
+			{"enter", "apply"}, {"esc", "cancel"}})
 	default:
-		action := "launch"
-		switch m.active {
-		case tabJobs:
-			action = "output"
-		case tabInventories:
-			action = "hosts"
-		case tabProjects:
-			action = "details"
-		}
-		keys = [][2]string{{"↑↓", "move"}, {"enter", action}}
-		if m.active == tabProjects || m.active == tabInventories {
-			keys = append(keys, [2]string{"s", "sync"})
-		}
-		keys = append(keys,
-			[2]string{"p", m.pinLabel()},
-			[2]string{"f", "show"},
-			[2]string{"/", "search"},
-			[2]string{"r", "refresh"})
-		if len(m.instances) > 1 {
-			keys = append(keys, [2]string{"i", "instance"})
-		}
-		keys = append(keys, [2]string{"?", "help"}, [2]string{"q", "quit"})
+		keys = m.listKeys()
 	}
-	return m.statusOrKeys(keyHelp(keys), "")
+	return m.statusOrKeys(keyLegend(keys), "")
+}
+
+func plainKeys(pairs [][2]string) []legend {
+	items := make([]legend, len(pairs))
+	for i, p := range pairs {
+		items[i] = legend{key: p[0], desc: p[1]}
+	}
+	return items
+}
+
+// listKeys is the legend of a list view. Two of its entries describe state
+// rather than an action always available: p reads "unpin" on a pinned row,
+// and f is how a list came to be as short as it is. Both are marked when
+// they are in force, so the legend says which view you are looking at.
+func (m Model) listKeys() []legend {
+	action := "launch"
+	switch m.active {
+	case tabJobs:
+		action = "output"
+	case tabInventories:
+		action = "hosts"
+	case tabProjects:
+		action = "details"
+	}
+	keys := []legend{{key: "↑↓", desc: "move"}, {key: "enter", desc: action}}
+	if m.active == tabProjects || m.active == tabInventories {
+		keys = append(keys, legend{key: "s", desc: "sync"})
+	}
+	pin := m.pinLabel()
+	keys = append(keys,
+		legend{key: "p", desc: pin, on: pin == "unpin"},
+		legend{key: "f", desc: "show", on: m.show[m.active].active()},
+		legend{key: "/", desc: "search", on: m.filters[m.active] != ""},
+		legend{key: "r", desc: "refresh"})
+	if len(m.instances) > 1 {
+		keys = append(keys, legend{key: "i", desc: "instance"})
+	}
+	return append(keys, legend{key: "?", desc: "help"}, legend{key: "q", desc: "quit"})
 }
 
 // statusOrKeys keeps the key legend on screen and puts an error or notice to
@@ -638,9 +655,29 @@ func truncateTo(s string, w int) string {
 }
 
 func keyHelp(pairs [][2]string) string {
-	parts := make([]string, 0, len(pairs))
-	for _, p := range pairs {
-		parts = append(parts, helpKeyStyle.Render(p[0])+" "+helpDescStyle.Render(p[1]))
+	items := make([]legend, len(pairs))
+	for i, p := range pairs {
+		items[i] = legend{key: p[0], desc: p[1]}
+	}
+	return keyLegend(items)
+}
+
+// legend is one entry of the key line. on marks an action already in force,
+// which is rendered differently: on a legend of a dozen muted words, the one
+// that describes the state you are in has to be findable at a glance.
+type legend struct {
+	key, desc string
+	on        bool
+}
+
+func keyLegend(items []legend) string {
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		desc := helpDescStyle.Render(it.desc)
+		if it.on {
+			desc = helpOnStyle.Render(it.desc)
+		}
+		parts = append(parts, helpKeyStyle.Render(it.key)+" "+desc)
 	}
 	return strings.Join(parts, helpDescStyle.Render(" · "))
 }

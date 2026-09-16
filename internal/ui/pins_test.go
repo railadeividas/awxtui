@@ -346,6 +346,73 @@ func TestSyncsAreLabelledInTheJobsList(t *testing.T) {
 	}
 }
 
+// on reports which legend entries are marked as in force. The mark itself is
+// a colour, which lipgloss drops when the output is not a terminal, so the
+// legend is checked as data rather than as a rendered string.
+func on(items []legend) map[string]bool {
+	out := map[string]bool{}
+	for _, it := range items {
+		if it.on {
+			out[it.key] = true
+		}
+	}
+	return out
+}
+
+// The key line is the only thing on screen that is always there. An entry
+// that describes the state of the view — unpin, show, search — is marked, so
+// a narrowed or pinned view can be recognised without reading the rows.
+func TestTheLegendMarksWhatIsInForce(t *testing.T) {
+	srv := mockAWX(t)
+	m := onTab(t, srv, tabJobs)
+	if got := on(m.listKeys()); len(got) != 0 {
+		t.Fatalf("nothing is in force yet, but the legend marks %v", got)
+	}
+
+	m = step(t, m, key("p"))
+	marked := on(m.listKeys())
+	if !marked["p"] {
+		t.Errorf("the row is pinned; p reads %q and should be marked", m.pinLabel())
+	}
+	if marked["f"] {
+		t.Errorf("the list is not narrowed, but f is marked")
+	}
+
+	m = setShow(t, m, "status", "successful")
+	if !on(m.listKeys())["f"] {
+		t.Errorf("the list is narrowed to %q, but f is not marked", m.show[tabJobs].summary())
+	}
+	// Moving off the pinned row unmarks p: the mark describes the row under
+	// the cursor, not the tab.
+	m = step(t, m, key("down"))
+	if on(m.listKeys())["p"] {
+		t.Errorf("p is marked on an unpinned row (label %q)", m.pinLabel())
+	}
+
+	// The same rule in the output view, where follow is the state you are in.
+	m = step(t, m, key("enter"))
+	if m.mode != modeOutput {
+		t.Fatalf("expected the output view, got %v (err %v)", m.mode, m.err)
+	}
+	if !m.follow {
+		t.Fatal("output opens in follow mode")
+	}
+	if !on(m.outputKeys())["f"] {
+		t.Errorf("follow is on, but f is not marked")
+	}
+	m = step(t, m, key("f"))
+	if on(m.outputKeys())["f"] {
+		t.Errorf("follow is off, but f is still marked")
+	}
+	if on(m.outputKeys())["p"] {
+		t.Errorf("this run is not pinned, but p is marked")
+	}
+	m = step(t, m, key("p"))
+	if !on(m.outputKeys())["p"] {
+		t.Errorf("this run is pinned now; p reads %q and should be marked", m.outputPinLabel())
+	}
+}
+
 // A filter is saved where the pins are, and is in force before the first
 // request goes out — restoring it after the list loaded would fetch the
 // unnarrowed list first and then throw it away.

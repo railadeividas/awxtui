@@ -354,32 +354,38 @@ func (m Model) outputView() string {
 	return b.String()
 }
 
+// outputKeys is the legend of the output view. find, follow and unpin
+// describe the state this view is already in rather than something waiting to
+// be done, so they are marked as in force.
+func (m Model) outputKeys() []legend {
+	keys := []legend{{key: "/", desc: "find", on: m.osearch.query != ""}}
+	if m.osearch.query != "" {
+		keys = append(keys, legend{key: "n/N", desc: "next/prev"})
+	}
+	pin := m.outputPinLabel()
+	keys = append(keys,
+		legend{key: "]/[", desc: "failure"},
+		legend{key: "t/T", desc: "task"},
+		legend{key: "f", desc: "follow", on: m.follow},
+		legend{key: "p", desc: pin, on: pin == "unpin"},
+		legend{key: "r", desc: "reload"},
+	)
+	if m.outputJob.IsRunning() {
+		keys = append(keys, legend{key: "c", desc: "cancel"})
+	}
+	return append(keys, legend{key: "esc", desc: "back"})
+}
+
 // outputFooter shows the search box when searching, otherwise the keys.
 func (m Model) outputFooter() string {
 	if m.osearch.editing {
 		return m.spread(m.osearch.input.View(), dimStyle.Render(m.matchLabel()))
 	}
-	keys := [][2]string{{"/", "find"}}
-	if m.osearch.query != "" {
-		keys = append(keys, [2]string{"n/N", "next/prev"})
-	}
-	keys = append(keys,
-		[2]string{"]/[", "failure"},
-		[2]string{"t/T", "task"},
-		[2]string{"f", "follow"},
-		[2]string{"p", m.outputPinLabel()},
-		[2]string{"r", "reload"},
-	)
-	if m.outputJob.IsRunning() {
-		keys = append(keys, [2]string{"c", "cancel"})
-	}
-	keys = append(keys, [2]string{"esc", "back"})
-
 	right := dimStyle.Render(fmt.Sprintf("%3.0f%%", m.vp.ScrollPercent()*100))
 	if m.osearch.query != "" {
 		right = dimStyle.Render(m.matchLabel()+"  ") + right
 	}
-	return m.statusOrKeys(keyHelp(keys), right)
+	return m.statusOrKeys(keyLegend(m.outputKeys()), right)
 }
 
 // matchLabel summarises the search, e.g. "3/17 for failed".

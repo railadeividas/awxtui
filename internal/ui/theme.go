@@ -32,6 +32,10 @@ var (
 
 	helpKeyStyle  = lipgloss.NewStyle().Foreground(accent)
 	helpDescStyle = lipgloss.NewStyle().Foreground(muted)
+	// helpOnStyle marks a key whose action is already in force — unpin on a
+	// pinned row, show on a narrowed list — so the state of the view can be
+	// read off the legend without inspecting the rows.
+	helpOnStyle = lipgloss.NewStyle().Foreground(accent).Bold(true)
 
 	// pinStyle marks a run kept on purpose; mineStyle marks one you started.
 	// Both have to stand out in a list where every other row is dim.
