@@ -236,8 +236,10 @@ func settle(t *testing.T, m Model, msg tea.Msg, depth int) Model {
 	t.Helper()
 	next, cmd := m.Update(msg)
 	m = next.(Model)
-	if depth > 6 {
-		return m
+	// Deep enough for a full pagination chain (bounded by maxPages in the
+	// model), while still catching a genuinely unbounded message loop.
+	if depth > maxPages+10 {
+		t.Fatalf("message loop did not settle after %d rounds", depth)
 	}
 	for _, out := range drain(cmd) {
 		switch out.(type) {

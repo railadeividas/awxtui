@@ -116,6 +116,29 @@ func (m Model) tabsView() string {
 	return m.spread(left, right)
 }
 
+// countLabel summarises how much of a list is loaded, and how much of it the
+// current filter matches.
+func (m Model) countLabel(t tab) string {
+	loaded, total, shown := len(m.rows[t]), m.count[t], len(m.visible(t))
+	var label string
+	switch {
+	case m.filters[t] != "" && total > loaded:
+		label = fmt.Sprintf("%d matched · %d of %d", shown, loaded, total)
+	case m.filters[t] != "":
+		label = fmt.Sprintf("%d matched · %d", shown, loaded)
+	case total > loaded:
+		label = fmt.Sprintf("%d of %d", loaded, total)
+	default:
+		label = fmt.Sprintf("%d", loaded)
+	}
+	if m.fetching[t] {
+		label += " ⋯"
+	} else if m.next[t] != "" && m.pages[t] >= maxPages {
+		label += " (page limit)"
+	}
+	return label
+}
+
 // filterLine shows the active filter or a hint, always occupying one line.
 func (m Model) filterLine(shown, total int) string {
 	var left string
@@ -127,7 +150,7 @@ func (m Model) filterLine(shown, total int) string {
 	default:
 		left = dimStyle.Render("press / to search")
 	}
-	right := dimStyle.Render(fmt.Sprintf("%d/%d", shown, total))
+	right := dimStyle.Render(m.countLabel(m.active))
 	return m.spread(left, right)
 }
 
@@ -151,7 +174,11 @@ func (m Model) listBody() string {
 
 func (m Model) hostsBody() string {
 	var b strings.Builder
-	b.WriteString(m.spread(dimStyle.Render("esc to go back"), dimStyle.Render(fmt.Sprintf("%d hosts", len(m.hostRows)))))
+	hosts := fmt.Sprintf("%d hosts", len(m.hostRows))
+	if m.hostCount > len(m.hostRows) {
+		hosts = fmt.Sprintf("%d of %d hosts", len(m.hostRows), m.hostCount)
+	}
+	b.WriteString(m.spread(dimStyle.Render("esc to go back"), dimStyle.Render(hosts)))
 	b.WriteString("\n")
 	h := m.tableHeight()
 	table := renderTable(hostColumns, m.hostRows, m.hostCursor, m.hostOffset, m.width-1, h)
@@ -419,7 +446,11 @@ func (m Model) outputView() string {
 	b.WriteString(m.rule())
 	b.WriteString("\n")
 	if strings.TrimSpace(m.outputText) == "" {
-		body := dimStyle.Render("  waiting for output…")
+		placeholder := "  waiting for output…"
+		if !j.IsRunning() && m.outputRetries >= maxOutputRetries {
+			placeholder = "  no output recorded for this job"
+		}
+		body := dimStyle.Render(placeholder)
 		b.WriteString(body)
 		b.WriteString(strings.Repeat("\n", max(0, m.outputHeight()-1)))
 	} else {

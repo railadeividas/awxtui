@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,21 +33,50 @@ func TestLive(t *testing.T) {
 	if m.err != nil {
 		t.Fatalf("connect failed: %v", m.err)
 	}
-	t.Logf("connected as %s, %d templates", m.user, len(m.rows[tabTemplates]))
+	t.Logf("connected as %s", m.user)
+	for _, t2 := range []struct {
+		tab  tab
+		name string
+	}{{tabTemplates, "templates"}, {tabInventories, "inventories"}, {tabProjects, "projects"}} {
+		m = step(t, m, key(strconv.Itoa(int(t2.tab)+1)))
+		if m.err != nil {
+			t.Fatalf("loading %s failed: %v", t2.name, m.err)
+		}
+		loaded, total := len(m.rows[t2.tab]), m.count[t2.tab]
+		t.Logf("%s: %d loaded of %d reported, %d pages, label %q",
+			t2.name, loaded, total, m.pages[t2.tab], m.countLabel(t2.tab))
+		if total > loaded && m.pages[t2.tab] < maxPages {
+			t.Errorf("%s: only %d of %d loaded despite pages remaining", t2.name, loaded, total)
+		}
+	}
+	m = step(t, m, key("1"))
 
 	m = step(t, m, key("2"))
 	if m.err != nil {
 		t.Fatalf("loading jobs failed: %v", m.err)
 	}
+	t.Logf("jobs: %d loaded, label %q", len(m.rows[tabJobs]), m.countLabel(tabJobs))
 	if len(m.rows[tabJobs]) == 0 {
 		t.Skip("no jobs on this instance to inspect")
 	}
+	// Scrolling to the end must page in more rather than stopping at page one.
+	before := len(m.rows[tabJobs])
+	m = step(t, m, key("G"))
+	t.Logf("jobs after scrolling to the end: %d loaded (was %d)", len(m.rows[tabJobs]), before)
+	if m.count[tabJobs] > before && len(m.rows[tabJobs]) <= before {
+		t.Errorf("scrolling to the end loaded nothing new (%d rows, %d reported)",
+			len(m.rows[tabJobs]), m.count[tabJobs])
+	}
+	m = step(t, m, key("g"))
 
 	m = step(t, m, key("enter"))
 	if m.err != nil {
 		t.Fatalf("opening job output failed: %v", m.err)
 	}
-	if strings.TrimSpace(m.outputText) == "" {
+	// A job that has not started yet legitimately has nothing to show.
+	queued := m.outputJob.Status == "pending" || m.outputJob.Status == "waiting" ||
+		m.outputJob.Status == "new"
+	if strings.TrimSpace(m.outputText) == "" && !queued {
 		t.Fatalf("job #%d (%s) produced no output", m.outputJob.ID, m.outputJob.Status)
 	}
 	t.Logf("job #%d %s: %d bytes of output, up to counter %d",
@@ -66,6 +96,13 @@ func TestLive(t *testing.T) {
 			t.Fatalf("opening finished job failed: %v", m.err)
 		}
 		if strings.TrimSpace(m.outputText) == "" {
+			// AWX can lag for a moment after a job finishes; only treat an
+			// older job with no output as a real failure.
+			if m.outputJob.Finished != nil && time.Since(*m.outputJob.Finished) < 2*time.Minute {
+				t.Logf("finished job #%d has no output yet (finished %s ago)",
+					m.outputJob.ID, time.Since(*m.outputJob.Finished).Round(time.Second))
+				break
+			}
 			t.Fatalf("finished job #%d produced no output", m.outputJob.ID)
 		}
 		t.Logf("finished job #%d %s: %d bytes in %s",

@@ -121,9 +121,21 @@ There is also a live test against a real instance, skipped by default:
 AWXTUI_LIVE=1 go test -v ./internal/ui -run TestLive
 ```
 
+## Pagination
+
+Templates, inventories and projects are read in full (200 per request), so
+search covers everything on the instance rather than the first page. Jobs are
+different — an instance can hold a hundred thousand of them — so they page in as
+you scroll, and keep paging while a search has too little to fill the screen.
+The count on the right of the search line shows what is loaded against what
+AWX reports, for example `100 of 97928`.
+
+Every list stops after 25 pages and says `(page limit)` rather than walking an
+instance forever. The Jobs list refreshes in the background by re-reading only
+the first page and merging it, so the pages you scrolled through stay put.
+
 ## Not done yet
 
-- Pagination: lists stop at the first page (200 templates, 100 jobs).
 - Search within job output, and jumping between failed tasks.
 - A config file with several named instances, instead of env vars.
 - Workflow job templates, schedules and ad-hoc commands.

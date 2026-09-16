@@ -13,14 +13,41 @@ import (
 )
 
 type (
-	connectedMsg   struct{ user string }
-	templatesMsg   []awx.JobTemplate
-	jobsMsg        []awx.Job
-	inventoriesMsg []awx.Inventory
-	projectsMsg    []awx.Project
-	hostsMsg       struct {
-		inventory string
-		hosts     []awx.Host
+	connectedMsg struct{ user string }
+
+	// Each list message carries one page. cont marks a continuation of a list
+	// already on screen, as opposed to a fresh first page.
+	templatesMsg struct {
+		items []awx.JobTemplate
+		next  string
+		count int
+		cont  bool
+	}
+	jobsMsg struct {
+		items []awx.Job
+		next  string
+		count int
+		cont  bool
+	}
+	inventoriesMsg struct {
+		items []awx.Inventory
+		next  string
+		count int
+		cont  bool
+	}
+	projectsMsg struct {
+		items []awx.Project
+		next  string
+		count int
+		cont  bool
+	}
+	hostsMsg struct {
+		inventory   string
+		inventoryID int
+		hosts       []awx.Host
+		next        string
+		count       int
+		cont        bool
 	}
 	// outputMsg carries a batch of job output. chunk holds the events newer
 	// than the counter that was requested; reset means replace, not append.
@@ -60,63 +87,68 @@ func (m Model) connect() tea.Msg {
 	return connectedMsg{user}
 }
 
-func (m Model) fetch(t tab) tea.Cmd {
+// fetch requests one page of a list. An empty pageURL starts at the first page;
+// cont marks the result as a continuation to append.
+func (m Model) fetch(t tab, pageURL string, cont bool) tea.Cmd {
 	c := m.client
 	switch t {
 	case tabTemplates:
 		return func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
-			v, err := c.JobTemplates(ctx)
+			p, err := c.JobTemplates(ctx, pageURL)
 			if err != nil {
 				return errMsg{err}
 			}
-			return templatesMsg(v)
+			return templatesMsg{items: p.Results, next: p.Next, count: p.Count, cont: cont}
 		}
 	case tabJobs:
 		return func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
-			v, err := c.Jobs(ctx)
+			p, err := c.Jobs(ctx, pageURL)
 			if err != nil {
 				return errMsg{err}
 			}
-			return jobsMsg(v)
+			return jobsMsg{items: p.Results, next: p.Next, count: p.Count, cont: cont}
 		}
 	case tabInventories:
 		return func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
-			v, err := c.Inventories(ctx)
+			p, err := c.Inventories(ctx, pageURL)
 			if err != nil {
 				return errMsg{err}
 			}
-			return inventoriesMsg(v)
+			return inventoriesMsg{items: p.Results, next: p.Next, count: p.Count, cont: cont}
 		}
 	case tabProjects:
 		return func() tea.Msg {
 			ctx, cancel := cmdCtx()
 			defer cancel()
-			v, err := c.Projects(ctx)
+			p, err := c.Projects(ctx, pageURL)
 			if err != nil {
 				return errMsg{err}
 			}
-			return projectsMsg(v)
+			return projectsMsg{items: p.Results, next: p.Next, count: p.Count, cont: cont}
 		}
 	}
 	return nil
 }
 
-func (m Model) fetchHosts(inventoryID int, name string) tea.Cmd {
+func (m Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.Cmd {
 	c := m.client
 	return func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
-		v, err := c.Hosts(ctx, inventoryID)
+		p, err := c.Hosts(ctx, inventoryID, pageURL)
 		if err != nil {
 			return errMsg{err}
 		}
-		return hostsMsg{inventory: name, hosts: v}
+		return hostsMsg{
+			inventory: name, inventoryID: inventoryID,
+			hosts: p.Results, next: p.Next, count: p.Count, cont: cont,
+		}
 	}
 }
 
@@ -204,7 +236,7 @@ func (m Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 		}
 		if cfg.AskInventory {
 			// Best effort: the form falls back to typing an id.
-			msg.inventories, _ = c.Inventories(ctx)
+			msg.inventories, _ = c.AllInventories(ctx, maxPages)
 		}
 		return msg
 	}

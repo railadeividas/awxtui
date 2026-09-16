@@ -98,17 +98,38 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, ou
 	return json.NewDecoder(res.Body).Decode(out)
 }
 
-type page[T any] struct {
-	Count   int `json:"count"`
-	Results []T `json:"results"`
+// Page is one page of an AWX list endpoint. Next is the API-supplied path of
+// the following page, empty when this is the last one.
+type Page[T any] struct {
+	Count   int    `json:"count"`
+	Next    string `json:"next"`
+	Results []T    `json:"results"`
 }
 
+// PageSize is how many records each list request asks for. AWX caps this at
+// its own max_page_size (200 by default).
+const PageSize = 200
+
+func listPage[T any](ctx context.Context, c *Client, path string) (Page[T], error) {
+	var p Page[T]
+	err := c.do(ctx, http.MethodGet, path, nil, &p)
+	return p, err
+}
+
+// list fetches a single page and discards the paging metadata. Only use it for
+// endpoints that cannot meaningfully have a second page.
 func list[T any](ctx context.Context, c *Client, path string) ([]T, error) {
-	var p page[T]
-	if err := c.do(ctx, http.MethodGet, path, nil, &p); err != nil {
-		return nil, err
+	p, err := listPage[T](ctx, c, path)
+	return p.Results, err
+}
+
+// firstOr returns pageURL, or first when no page was given. AWX hands back
+// Next as a root-relative path, which do() resolves against the base URL.
+func firstOr(pageURL, first string) string {
+	if strings.TrimSpace(pageURL) == "" {
+		return first
 	}
-	return p.Results, nil
+	return pageURL
 }
 
 // Me returns the username of the authenticated user, used as a connection check.
@@ -148,8 +169,11 @@ type JobTemplate struct {
 	LastJobRun *time.Time `json:"last_job_run"`
 }
 
-func (c *Client) JobTemplates(ctx context.Context) ([]JobTemplate, error) {
-	return list[JobTemplate](ctx, c, "/api/v2/job_templates/?order_by=name&page_size=200")
+// JobTemplates returns a page of job templates. Pass the Next value of a
+// previous page to continue; an empty pageURL starts at the beginning.
+func (c *Client) JobTemplates(ctx context.Context, pageURL string) (Page[JobTemplate], error) {
+	return listPage[JobTemplate](ctx, c,
+		firstOr(pageURL, fmt.Sprintf("/api/v2/job_templates/?order_by=name&page_size=%d", PageSize)))
 }
 
 // Job is a single (running or finished) job run.
@@ -181,9 +205,15 @@ func (j Job) IsRunning() bool {
 	return false
 }
 
-func (c *Client) Jobs(ctx context.Context) ([]Job, error) {
-	return list[Job](ctx, c, "/api/v2/jobs/?order_by=-id&page_size=100")
+// Jobs returns a page of jobs, newest first.
+func (c *Client) Jobs(ctx context.Context, pageURL string) (Page[Job], error) {
+	return listPage[Job](ctx, c,
+		firstOr(pageURL, fmt.Sprintf("/api/v2/jobs/?order_by=-id&page_size=%d", jobsPageSize)))
 }
+
+// jobsPageSize is smaller than PageSize: job lists are effectively unbounded,
+// so they are paged in on demand rather than read whole.
+const jobsPageSize = 100
 
 func (c *Client) Job(ctx context.Context, id int) (Job, error) {
 	var j Job
@@ -206,8 +236,29 @@ type Inventory struct {
 	} `json:"summary_fields"`
 }
 
-func (c *Client) Inventories(ctx context.Context) ([]Inventory, error) {
-	return list[Inventory](ctx, c, "/api/v2/inventories/?order_by=name&page_size=200")
+// Inventories returns a page of inventories.
+func (c *Client) Inventories(ctx context.Context, pageURL string) (Page[Inventory], error) {
+	return listPage[Inventory](ctx, c,
+		firstOr(pageURL, fmt.Sprintf("/api/v2/inventories/?order_by=name&page_size=%d", PageSize)))
+}
+
+// AllInventories walks every page of inventories, up to maxPages, for callers
+// that need a complete list rather than a screenful.
+func (c *Client) AllInventories(ctx context.Context, maxPages int) ([]Inventory, error) {
+	var out []Inventory
+	next := ""
+	for i := 0; i < maxPages; i++ {
+		p, err := c.Inventories(ctx, next)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, p.Results...)
+		if p.Next == "" {
+			break
+		}
+		next = p.Next
+	}
+	return out, nil
 }
 
 // Project is a source of playbooks.
@@ -221,8 +272,10 @@ type Project struct {
 	LastUpdated *time.Time `json:"last_updated"`
 }
 
-func (c *Client) Projects(ctx context.Context) ([]Project, error) {
-	return list[Project](ctx, c, "/api/v2/projects/?order_by=name&page_size=200")
+// Projects returns a page of projects.
+func (c *Client) Projects(ctx context.Context, pageURL string) (Page[Project], error) {
+	return listPage[Project](ctx, c,
+		firstOr(pageURL, fmt.Sprintf("/api/v2/projects/?order_by=name&page_size=%d", PageSize)))
 }
 
 // Host belongs to an inventory.
@@ -234,8 +287,10 @@ type Host struct {
 	HasActiveFailures bool   `json:"has_active_failures"`
 }
 
-func (c *Client) Hosts(ctx context.Context, inventoryID int) ([]Host, error) {
-	return list[Host](ctx, c, fmt.Sprintf("/api/v2/inventories/%d/hosts/?order_by=name&page_size=200", inventoryID))
+// Hosts returns a page of an inventory's hosts.
+func (c *Client) Hosts(ctx context.Context, inventoryID int, pageURL string) (Page[Host], error) {
+	return listPage[Host](ctx, c, firstOr(pageURL,
+		fmt.Sprintf("/api/v2/inventories/%d/hosts/?order_by=name&page_size=%d", inventoryID, PageSize)))
 }
 
 // Cancel requests cancellation of a running job.

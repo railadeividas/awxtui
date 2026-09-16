@@ -42,6 +42,15 @@ const (
 	jobsAutoRefresh = 5 * time.Second
 	// maxOutputPages bounds how many event pages one refresh burst pulls.
 	maxOutputPages = 50
+	// maxOutputRetries re-reads the output of a finished job that still looks
+	// empty, since AWX can lag behind the job finishing.
+	maxOutputRetries = 10
+	// maxPages bounds how many pages of any list are pulled, so a huge
+	// instance cannot be walked forever.
+	maxPages = 25
+	// loadMoreWithin triggers the next page once the cursor comes this close
+	// to the end of what is loaded.
+	loadMoreWithin = 10
 )
 
 // Model is the whole application state.
@@ -61,8 +70,17 @@ type Model struct {
 	filters [tabCount]string
 	loaded  [tabCount]bool
 
-	templates []awx.JobTemplate
-	jobs      []awx.Job
+	// paging state per tab: the next page URL AWX gave us, the total it
+	// reports, how many pages we pulled, and whether one is in flight.
+	next     [tabCount]string
+	count    [tabCount]int
+	pages    [tabCount]int
+	fetching [tabCount]bool
+
+	templates   []awx.JobTemplate
+	jobs        []awx.Job
+	inventories []awx.Inventory
+	projects    []awx.Project
 
 	filterInput textinput.Model
 	spin        spinner.Model
@@ -74,13 +92,18 @@ type Model struct {
 	outputText    string
 	outputCounter int
 	outputPages   int
+	outputRetries int
 	follow        bool
 
 	// inventory drill-down
-	hostTitle  string
-	hostRows   []row
-	hostCursor int
-	hostOffset int
+	hostTitle     string
+	hostRows      []row
+	hostCursor    int
+	hostOffset    int
+	hostInventory int
+	hostNext      string
+	hostCount     int
+	hostPages     int
 
 	// launch form for the selected template
 	form form
@@ -140,16 +163,61 @@ func (m Model) tableHeight() int {
 	return h
 }
 
-func (m *Model) moveCursor(delta int) {
+func (m *Model) moveCursor(delta int) tea.Cmd {
 	if m.mode == modeHosts {
 		n := len(m.hostRows)
 		m.hostCursor = clamp(m.hostCursor+delta, 0, n-1)
 		m.hostOffset = clampOffset(m.hostCursor, m.hostOffset, m.tableHeight(), n)
-		return
+		return m.loadMoreHosts()
 	}
 	n := len(m.visible(m.active))
 	m.cursor[m.active] = clamp(m.cursor[m.active]+delta, 0, n-1)
 	m.offset[m.active] = clampOffset(m.cursor[m.active], m.offset[m.active], m.tableHeight(), n)
+	return m.loadMore(m.active)
+}
+
+// loadMore pulls the next page once the cursor approaches the end of the rows
+// already loaded.
+func (m *Model) loadMore(t tab) tea.Cmd {
+	if len(m.visible(t))-m.cursor[t] > loadMoreWithin {
+		return nil
+	}
+	return m.nextPage(t)
+}
+
+// nextPage requests the following page of tab t, if there is one and we have
+// not hit the page cap.
+func (m *Model) nextPage(t tab) tea.Cmd {
+	if m.next[t] == "" || m.fetching[t] || m.pages[t] >= maxPages {
+		return nil
+	}
+	m.fetching[t] = true
+	m.pages[t]++
+	return m.fetch(t, m.next[t], true)
+}
+
+// continueLoad decides whether to keep pulling pages without being asked.
+// Templates, inventories and projects are read in full so that search covers
+// everything. Job lists are effectively unbounded, so they page in on demand —
+// except while a filter is active and showing too little to fill the screen.
+func (m *Model) continueLoad(t tab) tea.Cmd {
+	if t == tabJobs {
+		if m.filters[t] == "" || len(m.visible(t)) >= m.tableHeight() {
+			return nil
+		}
+	}
+	return m.nextPage(t)
+}
+
+func (m *Model) loadMoreHosts() tea.Cmd {
+	if m.hostNext == "" || m.hostPages >= maxPages ||
+		len(m.hostRows)-m.hostCursor > loadMoreWithin {
+		return nil
+	}
+	m.hostPages++
+	next := m.hostNext
+	m.hostNext = ""
+	return m.fetchHosts(m.hostInventory, m.hostTitle, next, true)
 }
 
 func (m *Model) selected() (row, bool) {
@@ -192,7 +260,9 @@ func (m *Model) load(t tab, force bool) tea.Cmd {
 		return nil
 	}
 	m.inflight++
-	return m.fetch(t)
+	m.pages[t] = 1
+	m.next[t] = ""
+	return m.fetch(t, "", false)
 }
 
 func (m *Model) openOutput(job awx.Job) tea.Cmd {
@@ -201,6 +271,7 @@ func (m *Model) openOutput(job awx.Job) tea.Cmd {
 	m.outputText = ""
 	m.outputCounter = 0
 	m.outputPages = 0
+	m.outputRetries = 0
 	m.follow = true
 	m.vp = viewport.New(m.width, m.outputHeight())
 	return m.fetchOutput(job.ID, 0)
@@ -244,10 +315,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := []tea.Cmd{tick(pollInterval)}
 		if m.mode == modeOutput && m.outputJob.IsRunning() {
 			cmds = append(cmds, m.fetchOutput(m.outputJob.ID, m.outputCounter))
+		} else if m.mode == modeOutput && m.outputText == "" && m.outputRetries < maxOutputRetries {
+			// A job that has just finished can report no output for a few
+			// seconds while AWX finishes processing its events.
+			m.outputRetries++
+			cmds = append(cmds, m.fetchOutput(m.outputJob.ID, 0))
 		}
 		if m.mode == modeList && m.active == tabJobs && time.Since(m.lastJobsPull) >= jobsAutoRefresh {
 			m.lastJobsPull = time.Now()
-			cmds = append(cmds, m.fetch(tabJobs))
+			cmds = append(cmds, m.fetch(tabJobs, "", false))
 		}
 		return m, tea.Batch(cmds...)
 
@@ -257,41 +333,88 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case templatesMsg:
 		m.inflight = max(0, m.inflight-1)
-		m.templates = msg
-		m.rows[tabTemplates] = templateRows(msg)
+		m.fetching[tabTemplates] = false
+		if msg.cont {
+			m.templates = append(m.templates, msg.items...)
+		} else {
+			m.templates = msg.items
+		}
+		m.rows[tabTemplates] = templateRows(m.templates)
+		m.next[tabTemplates] = msg.next
+		m.count[tabTemplates] = msg.count
 		m.loaded[tabTemplates] = true
 		m.clampAll()
-		return m, nil
+		return m, m.continueLoad(tabTemplates)
 
 	case jobsMsg:
 		m.inflight = max(0, m.inflight-1)
-		m.jobs = msg
-		m.rows[tabJobs] = jobRows(msg)
+		m.fetching[tabJobs] = false
+		// A background refresh re-reads page one; merge it so the pages the
+		// user already scrolled through are not thrown away.
+		merged := false
+		switch {
+		case msg.cont:
+			m.jobs = append(m.jobs, msg.items...)
+		case m.pages[tabJobs] > 1 && len(m.jobs) > 0:
+			m.jobs = mergeJobs(m.jobs, msg.items)
+			merged = true
+		default:
+			m.jobs = msg.items
+		}
+		m.rows[tabJobs] = jobRows(m.jobs)
+		if !merged {
+			m.next[tabJobs] = msg.next
+		}
+		m.count[tabJobs] = msg.count
 		m.loaded[tabJobs] = true
 		m.lastJobsPull = time.Now()
 		m.clampAll()
-		return m, nil
+		return m, m.continueLoad(tabJobs)
 
 	case inventoriesMsg:
 		m.inflight = max(0, m.inflight-1)
-		m.rows[tabInventories] = inventoryRows(msg)
+		m.fetching[tabInventories] = false
+		if msg.cont {
+			m.inventories = append(m.inventories, msg.items...)
+		} else {
+			m.inventories = msg.items
+		}
+		m.rows[tabInventories] = inventoryRows(m.inventories)
+		m.next[tabInventories] = msg.next
+		m.count[tabInventories] = msg.count
 		m.loaded[tabInventories] = true
 		m.clampAll()
-		return m, nil
+		return m, m.continueLoad(tabInventories)
 
 	case projectsMsg:
 		m.inflight = max(0, m.inflight-1)
-		m.rows[tabProjects] = projectRows(msg)
+		m.fetching[tabProjects] = false
+		if msg.cont {
+			m.projects = append(m.projects, msg.items...)
+		} else {
+			m.projects = msg.items
+		}
+		m.rows[tabProjects] = projectRows(m.projects)
+		m.next[tabProjects] = msg.next
+		m.count[tabProjects] = msg.count
 		m.loaded[tabProjects] = true
 		m.clampAll()
-		return m, nil
+		return m, m.continueLoad(tabProjects)
 
 	case hostsMsg:
 		m.inflight = max(0, m.inflight-1)
 		m.mode = modeHosts
 		m.hostTitle = msg.inventory
-		m.hostRows = hostRows(msg.hosts)
-		m.hostCursor, m.hostOffset = 0, 0
+		m.hostInventory = msg.inventoryID
+		m.hostNext = msg.next
+		m.hostCount = msg.count
+		if msg.cont {
+			m.hostRows = append(m.hostRows, hostRows(msg.hosts)...)
+		} else {
+			m.hostRows = hostRows(msg.hosts)
+			m.hostCursor, m.hostOffset = 0, 0
+			m.hostPages = 1
+		}
 		return m, nil
 
 	case outputMsg:
@@ -322,11 +445,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = fmt.Sprintf("launched job #%d", msg.job.ID)
 		m.loaded[tabJobs] = false
 		cmd := m.openOutput(msg.job)
-		return m, tea.Batch(cmd, m.fetch(tabJobs))
+		return m, tea.Batch(cmd, m.fetch(tabJobs, "", false))
 
 	case canceledMsg:
 		m.notice = fmt.Sprintf("cancel requested for job #%d", msg.id)
-		return m, m.fetch(tabJobs)
+		return m, m.fetch(tabJobs, "", false)
 
 	case errMsg:
 		m.inflight = max(0, m.inflight-1)
@@ -372,7 +495,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filterInput, cmd = m.filterInput.Update(msg)
 		m.filters[m.active] = m.filterInput.Value()
 		m.cursor[m.active], m.offset[m.active] = 0, 0
-		return m, cmd
+		return m, tea.Batch(cmd, m.continueLoad(m.active))
 
 	case modeLaunch:
 		switch key {
@@ -417,7 +540,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "q", "esc":
 			m.mode = modeList
-			return m, tea.Batch(m.fetch(tabJobs))
+			return m, tea.Batch(m.fetch(tabJobs, "", false))
 		case "ctrl+c":
 			return m, tea.Quit
 		case "f":
@@ -464,11 +587,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "up", "k":
-			m.moveCursor(-1)
-			return m, nil
+			return m, m.moveCursor(-1)
 		case "down", "j":
-			m.moveCursor(1)
-			return m, nil
+			return m, m.moveCursor(1)
 		case "?":
 			m.mode = modeHelp
 			return m, nil
@@ -484,17 +605,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeHelp
 		return m, nil
 	case "up", "k":
-		m.moveCursor(-1)
+		return m, m.moveCursor(-1)
 	case "down", "j":
-		m.moveCursor(1)
+		return m, m.moveCursor(1)
 	case "pgup", "ctrl+u":
-		m.moveCursor(-m.tableHeight() / 2)
+		return m, m.moveCursor(-m.tableHeight() / 2)
 	case "pgdown", "ctrl+d":
-		m.moveCursor(m.tableHeight() / 2)
+		return m, m.moveCursor(m.tableHeight() / 2)
 	case "home", "g":
-		m.moveCursor(-1 << 30)
+		return m, m.moveCursor(-1 << 30)
 	case "end", "G":
-		m.moveCursor(1 << 30)
+		return m, m.moveCursor(1 << 30)
 	case "tab", "right", "l":
 		m.active = (m.active + 1) % tabCount
 		return m, m.afterTabSwitch()
@@ -569,7 +690,7 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		}
 		m.inflight++
 		name := stripANSI(r.cells[0])
-		return m, m.fetchHosts(r.id, name)
+		return m, m.fetchHosts(r.id, name, "", false)
 
 	case tabProjects:
 		r, ok := m.selected()
@@ -578,6 +699,24 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// mergeJobs folds a freshly fetched first page into an already-paged list:
+// existing entries are updated in place and genuinely new jobs are prepended.
+func mergeJobs(existing, fresh []awx.Job) []awx.Job {
+	byID := make(map[int]int, len(existing))
+	for i, j := range existing {
+		byID[j.ID] = i
+	}
+	var added []awx.Job
+	for _, j := range fresh {
+		if i, ok := byID[j.ID]; ok {
+			existing[i] = j
+			continue
+		}
+		added = append(added, j)
+	}
+	return append(added, existing...)
 }
 
 func clamp(v, lo, hi int) int {
