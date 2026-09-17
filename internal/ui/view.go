@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -12,7 +13,32 @@ func wrapANSI(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	return ansi.Wrap(strings.ReplaceAll(s, "\r\n", "\n"), width, "")
+	return carryANSIStyle(ansi.Wrap(strings.ReplaceAll(s, "\r\n", "\n"), width, ""))
+}
+
+var sgrCode = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// carryANSIStyle makes every wrapped line self-contained. ansi.Wrap splits a
+// coloured line across several lines but only opens the colour once, at the
+// start of the first; a viewport window that starts mid-span (scrolled past
+// the opening line) then renders plain, uncoloured text. Reapply the active
+// SGR code at the start of each line it still covers.
+func carryANSIStyle(s string) string {
+	lines := strings.Split(s, "\n")
+	active := ""
+	for i, line := range lines {
+		if active != "" {
+			lines[i] = active + line
+		}
+		for _, code := range sgrCode.FindAllString(line, -1) {
+			if code == "\x1b[0m" || code == "\x1b[m" {
+				active = ""
+			} else {
+				active = code
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func stripANSI(s string) string { return ansi.Strip(s) }

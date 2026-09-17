@@ -167,6 +167,26 @@ func TestOutputSearchHighlightsWithoutLosingColour(t *testing.T) {
 	}
 }
 
+// TestWrapANSICarriesColourAcrossContinuationLines guards against the bug
+// where a long fatal message wrapped across several rows only carried colour
+// on its first row: ansi.Wrap opens the SGR code once and never reopens it,
+// so a viewport window scrolled to a later row rendered it in plain white.
+func TestWrapANSICarriesColourAcrossContinuationLines(t *testing.T) {
+	long := "\x1b[0;31mfatal: [web-99]: FAILED! this message is long enough to wrap across several rows of narrow terminal output\x1b[0m"
+	wrapped := strings.Split(wrapANSI(long, 20), "\n")
+	if len(wrapped) < 3 {
+		t.Fatalf("expected the fixture to wrap across several lines, got %d: %q", len(wrapped), wrapped)
+	}
+	for i, line := range wrapped {
+		if strings.TrimSpace(ansi.Strip(line)) == "" {
+			continue
+		}
+		if !strings.Contains(line, "\x1b[0;31m") {
+			t.Errorf("line %d lost its colour after wrapping: %q", i, line)
+		}
+	}
+}
+
 func TestOutputSearchReportsNoMatches(t *testing.T) {
 	m := openOutputView(t, outputMock(t))
 	m = step(t, m, key("/"))
