@@ -474,15 +474,20 @@ func mockAWX(t *testing.T) *mock {
 	mux.HandleFunc("/api/v2/project_updates/12/cancel/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	})
-	source := func(id int, name, path string) any {
+	source := func(id int, name, path, status string) any {
 		return map[string]any{
 			"id": id, "name": name, "source": "scm", "source_path": path,
-			"status": "successful", "update_on_launch": true,
+			"status": status, "last_updated": now.Add(-90 * time.Minute), "update_on_launch": true,
 			"summary_fields": map[string]any{"source_project": map[string]any{"name": "infra"}},
 		}
 	}
 	mux.HandleFunc("/api/v2/inventories/3/inventory_sources/", func(w http.ResponseWriter, r *http.Request) {
-		write(w, page(source(10, "git", "inventories/prod.yml"), source(11, "git", "inventories/edge.yml")))
+		// One source healthy, one failed: the detail view has to tell them
+		// apart, which the list's aggregate "sources" column cannot.
+		write(w, page(
+			source(10, "git", "inventories/prod.yml", "successful"),
+			source(11, "git", "inventories/edge.yml", "failed"),
+		))
 	})
 	mux.HandleFunc("/api/v2/inventories/4/inventory_sources/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, page())
@@ -740,16 +745,22 @@ func TestFlows(t *testing.T) {
 		show(t, "tab "+tabKey, m.View())
 	}
 
-	// inventory drill-down into hosts
+	// inventory drill-down: enter opens details, h opens its hosts
 	m = step(t, m, key("3"))
 	m = step(t, m, key("enter"))
+	if m.mode != modeInventory {
+		t.Fatalf("expected inventory details, got mode %v (err %v)", m.mode, m.err)
+	}
+	show(t, "inventory details", m.View())
+	m = step(t, m, key("h"))
 	if m.mode != modeHosts || len(m.hostRows) != 2 {
 		t.Fatalf("expected 2 hosts in drill-down, got mode %v rows %d (err %v)", m.mode, len(m.hostRows), m.err)
 	}
 	show(t, "hosts", m.View())
 
 	// jobs tab: cancel a running job
-	m = step(t, m, key("esc"))
+	m = step(t, m, key("esc")) // hosts -> inventory details
+	m = step(t, m, key("esc")) // details -> list
 	m = step(t, m, key("2"))
 	m = step(t, m, key("c"))
 	if !strings.Contains(m.notice, "cancel requested") {
@@ -824,7 +835,7 @@ func TestEveryViewRendersWithinTerminalBounds(t *testing.T) {
 		m := New(awx.New(srv.URL, "test-token", false))
 		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = step(t, m, m.connect())
-		for _, k := range []string{"1", "2", "m", "p", "m", "3", "4", "?", "4", "enter", "G"} {
+		for _, k := range []string{"1", "2", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G"} {
 			m = step(t, m, key(k))
 			out := m.View()
 			for i, line := range strings.Split(out, "\n") {

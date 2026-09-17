@@ -39,6 +39,7 @@ const (
 	modeError
 	modeInstances
 	modeProject
+	modeInventory
 	modeShow
 )
 
@@ -146,12 +147,19 @@ type Model struct {
 	hostNext      string
 	hostCount     int
 	hostPages     int
+	// hostLoading is true from the moment the hosts view is opened until its
+	// first page lands, so the view can show a spinner instead of an empty
+	// table that looks like the inventory truly has no hosts.
+	hostLoading bool
 
 	// launch form for the selected template
 	form form
 
 	// details of the selected project
 	project projectDetail
+
+	// details of the selected inventory, including its sources' sync status
+	inventory inventoryDetail
 
 	// syncing is set while a sync POST is in flight, so a held-down key
 	// cannot start the same update twice.
@@ -358,8 +366,15 @@ func (m *Model) selectedInventory() (awx.Inventory, bool) {
 	if !ok {
 		return awx.Inventory{}, false
 	}
+	return m.inventoryByID(r.id)
+}
+
+// inventoryByID resolves an inventory by ID rather than by the highlighted
+// row, for returning to its details from a view — the hosts list — that no
+// longer has a row selected on the Inventories tab.
+func (m *Model) inventoryByID(id int) (awx.Inventory, bool) {
 	for _, inv := range m.inventories {
-		if inv.ID == r.id {
+		if inv.ID == id {
 			return inv, true
 		}
 	}
@@ -564,6 +579,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.mode = modeHosts
+		m.hostLoading = false
 		m.hostTitle = msg.inventory
 		m.hostInventory = msg.inventoryID
 		m.hostNext = msg.next
@@ -575,6 +591,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.hostCursor, m.hostOffset = 0, 0
 			m.hostPages = 1
 		}
+		return m, nil
+
+	case inventorySourcesMsg:
+		if msg.gen != m.gen || msg.inventory.ID != m.inventory.inventory.ID {
+			return m, nil
+		}
+		m.inventory.sources = msg.sources
+		m.inventory.loading = false
 		return m, nil
 
 	case outputMsg:
@@ -642,6 +666,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.syncing = false
+		m.hostLoading = false
 		m.err = msg.err
 		if msg.tab < tabCount {
 			m.fetching[msg.tab], m.searching[msg.tab] = false, false
@@ -773,6 +798,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeProject:
 		return m.handleProjectKey(msg)
 
+	case modeInventory:
+		return m.handleInventoryKey(msg)
+
 	case modeShow:
 		return m.handleShowKey(msg)
 
@@ -782,6 +810,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeHosts:
 		switch key {
 		case "q", "esc":
+			// Hosts are only reached from an inventory's details, so back
+			// goes there rather than all the way out to the list.
+			if inv, ok := m.inventoryByID(m.hostInventory); ok {
+				return m, m.openInventoryDetail(inv)
+			}
 			m.mode = modeList
 			return m, nil
 		case "ctrl+c":
@@ -911,12 +944,11 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tabInventories:
-		r, ok := m.selected()
+		inv, ok := m.selectedInventory()
 		if !ok {
 			return m, nil
 		}
-		name := stripANSI(r.cells[0])
-		return m, m.fetchHosts(r.id, name, "", false)
+		return m, m.openInventoryDetail(inv)
 
 	case tabProjects:
 		p, ok := m.selectedProject()

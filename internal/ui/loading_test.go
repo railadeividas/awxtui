@@ -41,7 +41,7 @@ func TestLoadingBadgeCoversEveryRequest(t *testing.T) {
 		{name: "reload job output", tab: "2", setup: func(t *testing.T, m Model) Model {
 			return step(t, m, key("enter"))
 		}, msg: pressed("r")},
-		{name: "open an inventory's hosts", tab: "3", msg: pressed("enter")},
+		{name: "open an inventory's details", tab: "3", msg: pressed("enter")},
 		{name: "sync a project", tab: "4", setup: func(t *testing.T, m Model) Model {
 			return rowAt(t, m, "infra")
 		}, msg: pressed("s")},

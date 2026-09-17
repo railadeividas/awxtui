@@ -530,6 +530,7 @@ func TestHostsPageInOnDemand(t *testing.T) {
 	m := pagedModel(t, p, 120, 30)
 	m = step(t, m, key("3"))
 	m = step(t, m, key("enter"))
+	m = step(t, m, key("h"))
 
 	if m.mode != modeHosts {
 		t.Fatalf("expected the hosts view, got %v (err %v)", m.mode, m.err)

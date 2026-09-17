@@ -100,8 +100,9 @@ AWX has said who you are.
 | `↑` `↓` / `j` `k` | move; `ctrl+d` / `ctrl+u` half page, `g` / `G` top / bottom |
 | `/` | search the current view (`esc` clears) |
 | `i` | switch to another configured instance |
-| `enter` | launch a template · open job output · list inventory hosts · open project details |
+| `enter` | launch a template · open job output · open project or inventory details |
 | `s` | sync: SCM update a project · update an inventory's sources |
+| `h` | inside inventory details: list its hosts |
 | `p` | pin the highlighted record, or the run whose output is open |
 | `f` | narrow the view: pinned only, and on Jobs also owner, status and kind |
 | `↑↓` / `tab` | move between fields in the launch form; `←→` pick a choice, `space` toggles a multiselect, `ctrl+s` submits |
@@ -310,6 +311,7 @@ that look like a failed load.
 | `internal/ui/form.go` | launch form: fields, validation, payload building |
 | `internal/ui/output.go` | job output view: find, highlight, failure/task jumps |
 | `internal/ui/projects.go` | project details: SCM settings, update flags |
+| `internal/ui/inventories.go` | inventory details: each source's real sync status |
 | `internal/ui/table.go` | responsive column layout (columns shrink, then drop) |
 | `internal/ui/pins.go` | pinning, on every tab |
 | `internal/ui/show.go` | the f panel: what a view is narrowed to |
@@ -319,8 +321,8 @@ that look like a failed load.
 ## Tests
 
 `go test ./...` drives the whole model against a mock AWX API: connect, filter,
-launch, follow output, drill into inventory hosts, read project details, sync a
-project and an inventory's sources, cancel a job, plus a check
+launch, follow output, drill into inventory hosts, read project and inventory
+details, sync a project and an inventory's sources, cancel a job, plus a check
 that every view fits inside 80×24, 120×40 and 200×50 terminals.
 
 Set `AWXTUI_SHOW=1` to print the rendered views while testing:

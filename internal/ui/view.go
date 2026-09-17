@@ -54,6 +54,8 @@ func (m Model) View() string {
 		b.WriteString(m.pane(m.instancesModal()))
 	case modeProject:
 		b.WriteString(m.pane(m.projectModal()))
+	case modeInventory:
+		b.WriteString(m.pane(m.inventoryModal()))
 	case modeShow:
 		b.WriteString(m.pane(m.showModal()))
 	case modeHosts:
@@ -239,6 +241,11 @@ func (m Model) hostsBody() string {
 	b.WriteString(m.spread(dimStyle.Render("esc to go back"), dimStyle.Render(hosts)))
 	b.WriteString("\n")
 	h := m.tableHeight()
+	if m.hostLoading {
+		b.WriteString("\n  " + m.spin.View() + dimStyle.Render(" fetching hosts…"))
+		b.WriteString(strings.Repeat("\n", max(0, h-1)))
+		return b.String()
+	}
 	table := renderTable(hostColumns, m.hostRows, m.hostCursor, m.hostOffset, m.width-1, h)
 	b.WriteString(table)
 	b.WriteString(strings.Repeat("\n", max(0, h-countLines(table)+1)))
@@ -482,8 +489,9 @@ func (m Model) helpModal() string {
 		{"1-4 / tab", "switch view"},
 		{"↑↓ j k", "move  ·  ctrl+d ctrl+u half page  ·  g G top bottom"},
 		{"/", "search (esc clears)"},
-		{"enter", "launch · open job output · list inventory hosts · project details"},
+		{"enter", "launch · open job output · project or inventory details"},
 		{"s", "sync: SCM update a project · update an inventory's sources"},
+		{"h", "in inventory details: list its hosts"},
 		{"p", "pin the highlighted record or open output"},
 		{"f", "narrow what a list shows · follow job output"},
 		{"c", "cancel a running job"},
@@ -508,6 +516,8 @@ func (m Model) statusView() string {
 		keys = plainKeys([][2]string{{"↑↓", "move"}, {"esc", "back"}, {"?", "help"}, {"q", "quit"}})
 	case modeProject:
 		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
+	case modeInventory:
+		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"h", "hosts"}, {"s", "sync all"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
 	case modeFilter:
 		keys = plainKeys([][2]string{{"type", "to filter"}, {"enter", "keep"}, {"esc", "clear"}})
 	case modeShow:
@@ -536,9 +546,7 @@ func (m Model) listKeys() []legend {
 	switch m.active {
 	case tabJobs:
 		action = "output"
-	case tabInventories:
-		action = "hosts"
-	case tabProjects:
+	case tabInventories, tabProjects:
 		action = "details"
 	}
 	keys := []legend{{key: "↑↓", desc: "move"}, {key: "enter", desc: action}}
