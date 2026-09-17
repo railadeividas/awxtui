@@ -308,14 +308,43 @@ type Job struct {
 	Finished      *time.Time `json:"finished"`
 	Elapsed       float64    `json:"elapsed"`
 	JobType       string     `json:"job_type"`
+	LaunchType    string     `json:"launch_type"`
+	ExtraVars     string     `json:"extra_vars"`
+	Limit         string     `json:"limit"`
+	JobTags       string     `json:"job_tags"`
+	SkipTags      string     `json:"skip_tags"`
 	SummaryFields struct {
 		CreatedBy struct {
 			ID       int    `json:"id"`
 			Username string `json:"username"`
 		} `json:"created_by"`
 		Inventory struct {
+			ID   int    `json:"id"`
 			Name string `json:"name"`
 		} `json:"inventory"`
+		// Project is set for a project update in place of Inventory, which a
+		// project update's record has no use for.
+		Project struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		} `json:"project"`
+		JobTemplate struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		} `json:"job_template"`
+		Credentials []struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"credentials"`
+		// Credential is the one AWX puts on a project update in place of the
+		// Credentials list, which is always empty there.
+		Credential struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"credential"`
+		ExecutionEnvironment NamedRef `json:"execution_environment"`
 	} `json:"summary_fields"`
 }
 

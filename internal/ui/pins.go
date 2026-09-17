@@ -146,6 +146,14 @@ func (m Model) outputPinLabel() string {
 	return "pin"
 }
 
+// jobPinLabel does the same for the run whose launch details are open.
+func (m Model) jobPinLabel() string {
+	if m.store.Pinned(m.instance, state.GroupRuns, m.job.job.ID) {
+		return "unpin"
+	}
+	return "pin"
+}
+
 // inPinnedOrder puts the records AWX returned back into the order the pins
 // are kept in — most recently pinned first — rather than AWX's own.
 func inPinnedOrder[T any](ids []int, found []T, idOf func(T) int) []T {

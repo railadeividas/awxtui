@@ -107,6 +107,7 @@ AWX has said who you are.
 | `f` | narrow the view: pinned only, and on Jobs also owner, status and kind |
 | `↑↓` / `tab` | move between fields in the launch form; `←→` pick a choice, `space` toggles a multiselect, `enter` on a multiselect opens its full list, `ctrl+s` submits |
 | `c` | cancel a running job |
+| `d` | on the Jobs tab or its output: show what a job was launched with |
 | `f` | in the job output view: toggle follow mode |
 | `r` | refresh |
 | `?` | key help |
@@ -265,6 +266,7 @@ failed run:
 | `t` / `T` | next / previous task boundary (`TASK`, `PLAY`, `RUNNING HANDLER`, `PLAY RECAP`) |
 | `f` | follow the tail of a running job |
 | `g` / `G` | top / bottom |
+| `d` | what this job was launched with |
 | `esc` | clear the search, or leave the view |
 
 Searching and jumping work on the text as displayed, so Ansible's colour codes
@@ -277,6 +279,30 @@ renders, available while the job runs); a finished job is fetched in one request
 from `/stdout/`, falling back to events if AWX has no stored stdout. This works
 the same for a project update or an inventory sync, against that collection's
 own endpoints.
+
+## Job launch details
+
+`d` on the Jobs tab, or from a job's output view, opens what it was launched
+with: status, launch type (manual, scheduled, relaunch, a workflow
+dependency, ...), when it started and finished, and — for a playbook job —
+its job template, inventory, limit, job and skip tags, credentials,
+execution environment and extra vars. A project update shows the project it
+updated and its SCM credential instead, since its record has no inventory,
+tags or extra vars at all; an inventory sync shows its inventory the same way
+a playbook job does.
+
+The jobs list itself never carries this — `extra_vars`, `limit` and the rest
+are missing from `/api/v2/unified_jobs/` — so opening the view always makes
+one more request to the job's own collection (`/api/v2/jobs/`,
+`/api/v2/project_updates/` or `/api/v2/inventory_updates/`, matching what the
+run actually is) to read the full record.
+
+`enter` jumps straight from the details view to that job's output; `d` from
+the output view comes back to the details. `esc` from either always drops
+back to the jobs list, no matter how many times you have hopped between them.
+
+`p` pins or unpins the run right from its details, the same as on the jobs
+list or from its output.
 
 ## Project details
 
@@ -313,6 +339,7 @@ that look like a failed load.
 | `internal/ui` | Bubble Tea model, key handling, rendering |
 | `internal/ui/form.go` | launch form: fields, validation, payload building |
 | `internal/ui/output.go` | job output view: find, highlight, failure/task jumps |
+| `internal/ui/jobs.go` | job launch details: what a run was started with |
 | `internal/ui/projects.go` | project details: SCM settings, update flags |
 | `internal/ui/inventories.go` | inventory details: each source's real sync status |
 | `internal/ui/table.go` | responsive column layout (columns shrink, then drop) |

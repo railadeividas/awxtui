@@ -82,6 +82,8 @@ func (m Model) View() string {
 		b.WriteString(m.pane(m.projectModal()))
 	case modeInventory:
 		b.WriteString(m.pane(m.inventoryModal()))
+	case modeJob:
+		b.WriteString(m.pane(m.jobModal()))
 	case modeShow:
 		b.WriteString(m.pane(m.showModal()))
 	case modePick:
@@ -518,12 +520,13 @@ func (m Model) helpModal() string {
 		{"1-4 / tab", "switch view"},
 		{"↑↓ j k", "move  ·  ctrl+d ctrl+u half page  ·  g G top bottom"},
 		{"/", "search (esc clears)"},
-		{"enter", "launch · open job output · project or inventory details"},
+		{"enter", "launch · open job output · project or inventory details · in job details: its output"},
 		{"s", "sync: SCM update a project · update an inventory's sources"},
 		{"h", "in inventory details: list its hosts"},
-		{"p", "pin the highlighted record or open output"},
+		{"p", "pin the highlighted record, or the run whose output or details are open"},
 		{"f", "narrow what a list shows · follow job output"},
 		{"c", "cancel a running job"},
+		{"d", "job launch details (from the jobs list or its output)"},
 		{"n / N", "next · previous search hit in output"},
 		{"] / [", "next · previous failure in output"},
 		{"t / T", "next · previous task in output"},
@@ -547,6 +550,11 @@ func (m Model) statusView() string {
 		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
 	case modeInventory:
 		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"h", "hosts"}, {"s", "sync all"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
+	case modeJob:
+		pin := m.jobPinLabel()
+		keys = append(plainKeys([][2]string{{"↑↓", "scroll"}, {"enter", "output"}}),
+			legend{key: "p", desc: pin, on: pin == "unpin"})
+		keys = append(keys, plainKeys([][2]string{{"r", "reload"}, {"esc", "back"}, {"?", "help"}})...)
 	case modeFilter:
 		keys = plainKeys([][2]string{{"type", "to filter"}, {"enter", "keep"}, {"esc", "clear"}})
 	case modeShow:
@@ -590,6 +598,9 @@ func (m Model) listKeys() []legend {
 	keys := []legend{{key: "↑↓", desc: "move"}, {key: "enter", desc: action}}
 	if m.active == tabProjects || m.active == tabInventories {
 		keys = append(keys, legend{key: "s", desc: "sync"})
+	}
+	if m.active == tabJobs {
+		keys = append(keys, legend{key: "d", desc: "details"})
 	}
 	pin := m.pinLabel()
 	keys = append(keys,

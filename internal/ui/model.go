@@ -42,6 +42,7 @@ const (
 	modeInventory
 	modeShow
 	modePick
+	modeJob
 )
 
 const (
@@ -161,6 +162,9 @@ type Model struct {
 
 	// details of the selected inventory, including its sources' sync status
 	inventory inventoryDetail
+
+	// launch details of the selected job
+	job jobDetail
 
 	// syncing is set while a sync POST is in flight, so a held-down key
 	// cannot start the same update twice.
@@ -602,6 +606,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.inventory.loading = false
 		return m, nil
 
+	case jobDetailMsg:
+		if msg.gen != m.gen || msg.job.ID != m.job.job.ID {
+			return m, nil
+		}
+		m.job.job = msg.job
+		m.job.loading = false
+		return m, nil
+
 	case outputMsg:
 		if msg.gen != m.gen {
 			return m, nil
@@ -810,6 +822,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeInventory:
 		return m.handleInventoryKey(msg)
 
+	case modeJob:
+		return m.handleJobKey(msg)
+
 	case modeShow:
 		return m.handleShowKey(msg)
 
@@ -916,6 +931,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, m.cancelJob(j.Resource(), j.ID)
+			}
+		}
+	case "d":
+		if m.active == tabJobs {
+			if j, ok := m.selectedJob(); ok {
+				// The unified list can hold kinds awxtui has no detail endpoint
+				// for; see the same check in activate().
+				if !j.Supported() {
+					m.err = fmt.Errorf("#%d is a %s; awxtui cannot show its details yet",
+						j.ID, strings.ReplaceAll(j.Type, "_", " "))
+					return m, nil
+				}
+				return m, m.openJobDetail(j)
 			}
 		}
 	}

@@ -285,6 +285,8 @@ func (m Model) handleOutputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.err = nil
 		return m, m.fetchOutput(m.outputJob.Resource(), m.outputJob.ID, 0)
+	case "d":
+		return m, m.openJobDetail(m.outputJob)
 	case "c":
 		if m.outputJob.IsRunning() {
 			if m.client.IsReadOnly() {
@@ -371,11 +373,11 @@ func (m Model) outputKeys() []legend {
 	}
 	pin := m.outputPinLabel()
 	keys = append(keys,
-		legend{key: "]/[", desc: "failure"},
+		legend{key: "]/[", desc: "fail"},
 		legend{key: "t/T", desc: "task"},
 		legend{key: "f", desc: "follow", on: m.follow},
 		legend{key: "p", desc: pin, on: pin == "unpin"},
-		legend{key: "r", desc: "reload"},
+		legend{key: "d", desc: "details"},
 	)
 	if m.outputJob.IsRunning() {
 		keys = append(keys, legend{key: "c", desc: "cancel"})

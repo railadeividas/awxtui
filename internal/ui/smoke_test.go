@@ -219,7 +219,18 @@ func mockAWX(t *testing.T) *mock {
 		write(w, map[string]any{"id": 43, "name": "Deploy web app", "status": "running", "elapsed": 14.1})
 	})
 	mux.HandleFunc("/api/v2/jobs/42/", func(w http.ResponseWriter, r *http.Request) {
-		write(w, map[string]any{"id": 42, "name": "Deploy web app", "status": "successful", "elapsed": 96.2})
+		write(w, map[string]any{
+			"id": 42, "name": "Deploy web app", "status": "successful", "elapsed": 96.2,
+			"launch_type": "manual", "extra_vars": "release: v1.4.2\n", "limit": "web",
+			"job_tags": "deploy", "skip_tags": "slow",
+			"summary_fields": map[string]any{
+				"inventory":    map[string]any{"id": 1, "name": "all"},
+				"job_template": map[string]any{"id": 8, "name": "Deploy web app"},
+				"credentials": []any{
+					map[string]any{"id": 5, "name": "prod ssh", "kind": "ssh"},
+				},
+			},
+		})
 	})
 	// Real AWX rejects format=ansi when the client asks for JSON, and serves
 	// nothing useful while a job is still running.
@@ -835,7 +846,7 @@ func TestEveryViewRendersWithinTerminalBounds(t *testing.T) {
 		m := New(awx.New(srv.URL, "test-token", false))
 		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = step(t, m, m.connect())
-		for _, k := range []string{"1", "2", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G"} {
+		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G"} {
 			m = step(t, m, key(k))
 			out := m.View()
 			for i, line := range strings.Split(out, "\n") {
