@@ -152,7 +152,10 @@ func renderTable(cols []col, rows []row, cursor, offset, width, height int) stri
 	for i := offset; i < end; i++ {
 		line := joinCells(rows[i].cells, ws)
 		if i == cursor {
-			b.WriteString(rowSelStyle.Render("▌" + line))
+			// Cells carry their own ANSI (statusBadge, dimStyle, …); each one's
+			// reset code would cut the row background short partway through
+			// the line, so strip embedded styling before applying the row's.
+			b.WriteString(rowSelStyle.Render("▌" + ansi.Strip(line)))
 		} else {
 			b.WriteString(rowStyle.Render(" " + line))
 		}
