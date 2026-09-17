@@ -42,7 +42,6 @@ func TestLoadingBadgeCoversEveryRequest(t *testing.T) {
 			return step(t, m, key("enter"))
 		}, msg: pressed("r")},
 		{name: "open an inventory's hosts", tab: "3", msg: pressed("enter")},
-		{name: "open a project's playbooks", tab: "4", msg: pressed("enter")},
 		{name: "sync a project", tab: "4", setup: func(t *testing.T, m Model) Model {
 			return rowAt(t, m, "infra")
 		}, msg: pressed("s")},

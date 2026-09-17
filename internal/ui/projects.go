@@ -10,27 +10,20 @@ import (
 	"github.com/railadeividas/awxtui/internal/awx"
 )
 
-// maxProjectPlaybooks bounds how many playbook names the details view lists.
-// A monorepo project can report hundreds; the rest are summarised in a line.
-const maxProjectPlaybooks = 200
-
 // projectDetail is the state of the project details view. The project record
 // comes straight from the list — AWX's project list returns the full record —
-// so only the playbook names need fetching.
+// so opening it needs no follow-up fetch.
 type projectDetail struct {
-	project   awx.Project
-	playbooks []string
-	loading   bool
-	offset    int
+	project awx.Project
+	offset  int
 }
 
-// openProject shows the details of the selected project and asks AWX for its
-// playbooks.
+// openProject shows the details of the selected project.
 func (m *Model) openProject(p awx.Project) tea.Cmd {
 	m.err, m.notice = nil, ""
 	m.mode = modeProject
-	m.project = projectDetail{project: p, loading: true}
-	return m.fetchPlaybooks(p.ID)
+	m.project = projectDetail{project: p}
+	return nil
 }
 
 // selectedProject resolves the highlighted row back to its project record.
@@ -73,9 +66,6 @@ func (m Model) handleProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "end", "G":
 		m.project.offset = m.clampProjectOffset(1 << 30)
 		return m, nil
-	case "r":
-		m.project.loading = true
-		return m, m.fetchPlaybooks(m.project.project.ID)
 	case "s":
 		p := m.project.project
 		cmd := m.startSync("project "+p.Name, m.syncProject(p))
@@ -125,7 +115,7 @@ func (m Model) projectModal() string {
 	b.WriteString("\n\n")
 	b.WriteString(strings.Join(lines[off:end], "\n"))
 	b.WriteString("\n\n")
-	keys := [][2]string{{"esc", "close"}, {"s", "sync"}, {"r", "reload playbooks"}}
+	keys := [][2]string{{"esc", "close"}, {"s", "sync"}}
 	if len(lines) > window {
 		keys = append([][2]string{{"↑↓", "scroll"}}, keys...)
 	}
@@ -177,27 +167,6 @@ func (m Model) projectBody(width int) []string {
 	field("job timeout", rowStyle.Render(seconds(p.Timeout)))
 	field("created", stamp(p.Created))
 
-	lines = append(lines, "")
-	switch {
-	case m.project.loading:
-		lines = append(lines, dimStyle.Render("playbooks  loading…"))
-	case len(m.project.playbooks) == 0:
-		lines = append(lines, dimStyle.Render("playbooks  none reported"))
-	default:
-		names := m.project.playbooks
-		over := 0
-		if len(names) > maxProjectPlaybooks {
-			over = len(names) - maxProjectPlaybooks
-			names = names[:maxProjectPlaybooks]
-		}
-		lines = append(lines, headerStyle.Render(fmt.Sprintf("playbooks (%d)", len(m.project.playbooks))))
-		for _, n := range names {
-			lines = append(lines, "  "+rowStyle.Render(truncateTo(n, width-8)))
-		}
-		if over > 0 {
-			lines = append(lines, dimStyle.Render(fmt.Sprintf("  … %d more not shown", over)))
-		}
-	}
 	return lines
 }
 

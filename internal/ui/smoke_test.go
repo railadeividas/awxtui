@@ -418,18 +418,6 @@ func mockAWX(t *testing.T) *mock {
 			"summary_fields": map[string]any{"organization": map[string]any{"name": "Default"}},
 		}})...))
 	})
-	// Real AWX answers a bare JSON array here, not a page. The list is long
-	// enough that the details view has to scroll.
-	mux.HandleFunc("/api/v2/projects/5/playbooks/", func(w http.ResponseWriter, r *http.Request) {
-		names := make([]string, 0, 40)
-		for i := 1; i <= 40; i++ {
-			names = append(names, fmt.Sprintf("plays/site-%02d.yml", i))
-		}
-		write(w, names)
-	})
-	mux.HandleFunc("/api/v2/projects/6/playbooks/", func(w http.ResponseWriter, r *http.Request) {
-		write(w, []string{})
-	})
 
 	// ---- syncing ----
 	//

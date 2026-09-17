@@ -280,16 +280,21 @@ own endpoints.
 updated, organization, SCM type, URL, branch, refspec and the checked-out
 revision, its SCM credential, local path, the update flags that are actually
 set (update on launch, clean, delete on update, track submodules, allow branch
-override), the cache and job timeouts, and the playbooks found in the
-checkout. Nothing but the playbook list costs a request: AWX's project list
-returns the whole record.
+override), and the cache and job timeouts. AWX's project list already returns
+the whole record, so opening the details costs no extra request.
 
-A project's details can be longer than the screen — the firewall project on
-the instance this was built against renders 22 lines — so the view scrolls
-with `↑↓`, `ctrl+d` / `ctrl+u` and `g` / `G`, and says which lines are shown.
-A manual project (no SCM type) says `manual` and `none reported` rather than
-leaving blank rows that look like a failed load, and `r` re-reads the
-playbooks, which a project that has never updated does not have.
+The view was originally going to list the playbooks AWX finds in the
+checkout too, but `/api/v2/projects/{id}/playbooks/` walks the whole
+repository for any YAML file that merely parses as a top-level list — it
+isn't scoped to a `playbooks/` directory — so a project that stores
+non-playbook YAML (e.g. list-shaped inventory files) elsewhere in the repo
+gets those listed as "playbooks" too. That's a real-AWX quirk, not something
+awxtui can filter reliably, so the playbook list was dropped.
+
+A project's details can be longer than the screen, so the view scrolls with
+`↑↓`, `ctrl+d` / `ctrl+u` and `g` / `G`, and says which lines are shown. A
+manual project (no SCM type) says `manual` rather than leaving blank rows
+that look like a failed load.
 
 ## Layout
 
@@ -304,7 +309,7 @@ playbooks, which a project that has never updated does not have.
 | `internal/ui` | Bubble Tea model, key handling, rendering |
 | `internal/ui/form.go` | launch form: fields, validation, payload building |
 | `internal/ui/output.go` | job output view: find, highlight, failure/task jumps |
-| `internal/ui/projects.go` | project details: SCM settings, update flags, playbooks |
+| `internal/ui/projects.go` | project details: SCM settings, update flags |
 | `internal/ui/table.go` | responsive column layout (columns shrink, then drop) |
 | `internal/ui/pins.go` | pinning, on every tab |
 | `internal/ui/show.go` | the f panel: what a view is narrowed to |

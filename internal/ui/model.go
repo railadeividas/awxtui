@@ -559,20 +559,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampAll()
 		return m, m.continueLoad(tabProjects)
 
-	case playbooksMsg:
-		// A reply for a project no longer on screen belongs to a details view
-		// that has since been closed or replaced.
-		if msg.gen != m.gen || m.mode != modeProject || msg.projectID != m.project.project.ID {
-			return m, nil
-		}
-		m.project.loading = false
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		m.project.playbooks = msg.names
-		return m, nil
-
 	case hostsMsg:
 		if msg.gen != m.gen {
 			return m, nil

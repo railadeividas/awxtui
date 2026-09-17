@@ -636,8 +636,7 @@ func (c *Client) AllCredentials(ctx context.Context, maxPages int) ([]Credential
 }
 
 // Project is a source of playbooks. The list endpoint already returns every
-// field below, so the details view needs no follow-up GET for anything but
-// the playbook names.
+// field the details view needs.
 type Project struct {
 	ID                    int        `json:"id"`
 	Name                  string     `json:"name"`
@@ -682,14 +681,6 @@ func (p Project) SCMTypeLabel() string {
 // Projects returns a page of projects.
 func (c *Client) Projects(ctx context.Context, pageURL, search string) (Page[Project], error) {
 	return listPage[Project](ctx, c, firstOr(pageURL, listURL("/api/v2/projects/", "name", PageSize, search)))
-}
-
-// ProjectPlaybooks lists the playbook files AWX found in a project's
-// checkout. The endpoint answers a bare JSON array of names, not a page.
-func (c *Client) ProjectPlaybooks(ctx context.Context, projectID int) ([]string, error) {
-	var names []string
-	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v2/projects/%d/playbooks/", projectID), nil, &names)
-	return names, err
 }
 
 // Host belongs to an inventory.

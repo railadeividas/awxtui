@@ -413,18 +413,9 @@ func TestLiveProjectDetails(t *testing.T) {
 		if m.mode != modeProject {
 			t.Fatalf("details did not open for %q: mode %v err %v", p.Name, m.mode, m.err)
 		}
-		if m.project.loading {
-			t.Errorf("%s: playbooks never settled", p.Name)
-		}
-		// A project that has never updated has no checkout, and AWX answers
-		// the playbooks call with an error rather than an empty list.
-		if m.err != nil && p.LastUpdated != nil {
-			t.Errorf("%s (#%d, updated %s): playbooks failed: %v",
-				p.Name, p.ID, ago(*p.LastUpdated), m.err)
-		}
-		t.Logf("%s (#%d): %s %s@%.7s, status %s, %d playbooks, %d body lines",
+		t.Logf("%s (#%d): %s %s@%.7s, status %s, %d body lines",
 			p.Name, p.ID, p.SCMTypeLabel(), p.SCMBranch, p.SCMRevision,
-			p.Status, len(m.project.playbooks), len(m.projectBody(m.projectWidth())))
+			p.Status, len(m.projectBody(m.projectWidth())))
 		show(t, "live project details: "+p.Name, m.View())
 		m = step(t, m, key("G"))
 		m = step(t, m, key("esc"))
