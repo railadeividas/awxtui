@@ -147,12 +147,6 @@ func (m Model) inventoryModal() string {
 	}
 	b.WriteString("\n\n")
 	b.WriteString(strings.Join(lines[off:end], "\n"))
-	b.WriteString("\n\n")
-	keys := [][2]string{{"esc", "close"}, {"h", "hosts"}, {"s", "sync all"}, {"r", "reload"}}
-	if len(lines) > window {
-		keys = append([][2]string{{"↑↓", "scroll"}}, keys...)
-	}
-	b.WriteString(keyHelp(keys))
 	return modalStyle.Width(width).Render(b.String())
 }
 

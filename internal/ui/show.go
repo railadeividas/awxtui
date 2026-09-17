@@ -287,6 +287,5 @@ func (m Model) showModal() string {
 	if !m.store.Any(m.instance, pinGroup(m.panel.tab)) {
 		b.WriteString(dimStyle.Render("nothing pinned here yet — p pins the highlighted row") + "\n")
 	}
-	b.WriteString(dimStyle.Render("↑↓ choose · ←→ or space set · c clears · enter applies · esc cancels"))
-	return modalStyle.Width(min(m.width-6, 72)).Render(b.String())
+	return modalStyle.Width(min(m.width-6, 72)).Render(strings.TrimSuffix(b.String(), "\n"))
 }

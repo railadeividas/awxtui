@@ -106,7 +106,5 @@ func (m Model) pickerModal() string {
 	if offset > 0 || end < n {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("  %d-%d of %d", offset+1, end, n)) + "\n")
 	}
-	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("↑↓ move · space toggle · a all · c none · enter/esc done"))
 	return modalStyle.Width(width).Render(b.String())
 }

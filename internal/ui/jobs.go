@@ -90,9 +90,10 @@ func (m Model) handleJobKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // jobWindow is how many body lines the modal can show at once. The modal
-// spends lines on its border, padding, title and key legend.
+// spends lines on its border, padding and title; the key legend lives in the
+// global status bar, the one place every view's legend appears.
 func (m Model) jobWindow() int {
-	return max(m.tableHeight()-7, 3)
+	return max(m.tableHeight()-5, 3)
 }
 
 func (m Model) clampJobOffset(off int) int {
@@ -119,12 +120,6 @@ func (m Model) jobModal() string {
 	}
 	b.WriteString("\n\n")
 	b.WriteString(strings.Join(lines[off:end], "\n"))
-	b.WriteString("\n\n")
-	keys := [][2]string{{"esc", "close"}, {"enter", "output"}, {"p", m.jobPinLabel()}, {"r", "reload"}}
-	if len(lines) > window {
-		keys = append([][2]string{{"↑↓", "scroll"}}, keys...)
-	}
-	b.WriteString(keyHelp(keys))
 	return modalStyle.Width(width).Render(b.String())
 }
 

@@ -149,9 +149,5 @@ func (m Model) instancesModal() string {
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
-	b.WriteString("\n")
-	b.WriteString(keyHelp([][2]string{
-		{"↑↓", "choose"}, {"enter", "switch"}, {"esc", "cancel"},
-	}))
 	return modalStyle.Width(width).Render(b.String())
 }

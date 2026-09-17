@@ -282,13 +282,33 @@ func (m Model) hostsBody() string {
 	return b.String()
 }
 
-// pane centres content horizontally in the body area, but keeps it flush to
-// the top vertically so the closing rule and legend follow immediately, the
-// same as listBody and outputView — a modal shorter than the body area used
-// to leave a gap of blank rows above the legend from vertical centering.
+// pane centres content horizontally in the body area. Vertically, a modal
+// box shorter than the body grows to fill it (growBox) so any leftover space
+// stays inside its border, rather than showing up as a gap between the box
+// and the rule and legend that follow — the same total height as listBody
+// and outputView fill, just distributed inside the border instead of outside
+// it.
 func (m Model) pane(content string) string {
 	h := m.tableHeight() + 1
-	return lipgloss.Place(m.width, h, lipgloss.Center, lipgloss.Top, clip(content, h))
+	return lipgloss.Place(m.width, h, lipgloss.Center, lipgloss.Top, clip(growBox(content, h), h))
+}
+
+// growBox extends a lipgloss-bordered box to height h by repeating the blank
+// row lipgloss's own vertical padding inserts just inside the top border —
+// it already carries the right width and border colouring — before the
+// box's closing border line.
+func growBox(content string, h int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) < 3 || len(lines) >= h {
+		return content
+	}
+	blank := lines[1]
+	last := lines[len(lines)-1]
+	body := lines[:len(lines)-1]
+	for len(body)+1 < h {
+		body = append(body, blank)
+	}
+	return strings.Join(append(body, last), "\n")
 }
 
 // clip drops lines that would not fit in h, keeping the view inside the screen.
@@ -337,25 +357,33 @@ func (m Model) launchModal() string {
 		body = "\n\n" + m.formFields(inner)
 	}
 
-	keys := [][2]string{{"enter", "launch"}, {"↑↓", "field"}}
+	foot := ""
+	if f.problem != "" {
+		foot = "\n\n" + errStyle.Render("✗ "+oneLine(f.problem))
+	}
+	return modalStyle.Width(inner).Render(head.String() + body + foot)
+}
+
+// formKeys is the launch form's legend, which depends on the focused
+// field's kind — a multi-choice field takes space and enter differently
+// than a plain one. It is shown in the global status bar, the one place a
+// legend appears for every view.
+func (m Model) formKeys() []legend {
+	f := &m.form
+	pairs := [][2]string{{"enter", "launch"}, {"↑↓", "field"}}
 	if len(f.fields) > 0 {
 		switch f.fields[f.cursor].kind {
 		case fChoice:
-			keys = append(keys, [2]string{"←→", "choose"})
+			pairs = append(pairs, [2]string{"←→", "choose"})
 		case fMultiChoice:
-			keys = [][2]string{{"ctrl+s", "launch"}, {"↑↓", "field"},
+			pairs = [][2]string{{"ctrl+s", "launch"}, {"↑↓", "field"},
 				{"←→", "move"}, {"space", "toggle"}, {"enter", "list"}}
 		case fTextarea:
-			keys = [][2]string{{"ctrl+s", "launch"}, {"↑↓", "field"}, {"enter", "newline"}}
+			pairs = [][2]string{{"ctrl+s", "launch"}, {"↑↓", "field"}, {"enter", "newline"}}
 		}
 	}
-	keys = append(keys, [2]string{"esc", "cancel"})
-
-	foot := "\n\n" + keyHelp(keys)
-	if f.problem != "" {
-		foot = "\n\n" + errStyle.Render("✗ "+oneLine(f.problem)) + "\n" + keyHelp(keys)
-	}
-	return modalStyle.Width(inner).Render(head.String() + body + foot)
+	pairs = append(pairs, [2]string{"esc", "cancel"})
+	return plainKeys(pairs)
 }
 
 // formFields renders the field list, windowed around the focused field.
@@ -510,8 +538,6 @@ func (m Model) errorModal() string {
 		lines = append(lines[:cap], dimStyle.Render("… message truncated"))
 	}
 	b.WriteString(rowStyle.Render(strings.Join(lines, "\n")))
-	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("press any key to close · r retries the current view"))
 	return modalStyle.BorderForeground(danger).Width(width).Render(b.String())
 }
 
@@ -539,14 +565,18 @@ func (m Model) helpModal() string {
 	for _, g := range groups {
 		b.WriteString(cell(helpKeyStyle.Render(g[0]), 18) + helpDescStyle.Render(g[1]) + "\n")
 	}
-	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("press any key to close"))
-	return modalStyle.Width(min(m.width-6, 76)).Render(b.String())
+	return modalStyle.Width(min(m.width-6, 76)).Render(strings.TrimSuffix(b.String(), "\n"))
 }
 
 func (m Model) statusView() string {
 	var keys []legend
 	switch m.mode {
+	case modeHelp:
+		keys = plainKeys([][2]string{{"esc", "close"}})
+	case modeError:
+		keys = plainKeys([][2]string{{"r", "retry"}, {"esc", "close"}})
+	case modeInstances:
+		keys = plainKeys([][2]string{{"↑↓", "choose"}, {"enter", "switch"}, {"esc", "cancel"}})
 	case modeHosts:
 		keys = plainKeys([][2]string{{"↑↓", "move"}, {"esc", "back"}, {"?", "help"}, {"q", "quit"}})
 	case modeProject:
@@ -567,11 +597,7 @@ func (m Model) statusView() string {
 		keys = plainKeys([][2]string{{"↑↓", "move"}, {"space", "toggle"}, {"a", "all"},
 			{"c", "none"}, {"enter", "done"}})
 	case modeLaunch:
-		// The form's own footer (launchModal) spells out what enter does on
-		// the focused field; the status bar just needs the keys that always
-		// work. q is not one of them here — it types into a text field
-		// rather than quitting, unlike every list view.
-		keys = plainKeys([][2]string{{"↑↓", "field"}, {"ctrl+s", "launch"}, {"esc", "cancel"}})
+		keys = m.formKeys()
 	default:
 		keys = m.listKeys()
 	}
@@ -749,14 +775,6 @@ func truncateTo(s string, w int) string {
 		return ansi.Truncate(s, w, "…")
 	}
 	return s
-}
-
-func keyHelp(pairs [][2]string) string {
-	items := make([]legend, len(pairs))
-	for i, p := range pairs {
-		items[i] = legend{key: p[0], desc: p[1]}
-	}
-	return keyLegend(items)
 }
 
 // legend is one entry of the key line. on marks an action already in force,
