@@ -195,6 +195,14 @@ func (m Model) listBody() string {
 		b.WriteString(strings.Repeat("\n", max(0, m.tableHeight()-1)))
 		return b.String()
 	}
+	if m.searching[m.active] {
+		// A pending server search must not show the rows loaded before it
+		// was typed: they can look like an empty or stale final answer while
+		// the request that would replace them is still in flight.
+		b.WriteString("\n  " + m.spin.View() + dimStyle.Render(" searching…"))
+		b.WriteString(strings.Repeat("\n", max(0, m.tableHeight()-1)))
+		return b.String()
+	}
 	h := m.tableHeight()
 	offset := m.offset[m.active]
 	// A page arriving while you scroll deserves a word where the eye already

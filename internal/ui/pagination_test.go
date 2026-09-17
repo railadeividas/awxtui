@@ -244,6 +244,41 @@ func TestCompleteListFallsBackToServerSearch(t *testing.T) {
 	}
 }
 
+// Backspacing away from a query that needed AWX, onto one a complete list
+// already answers locally, must not leave the tab waiting on the earlier,
+// now-irrelevant search: the local match should show instantly.
+func TestLocalMatchClearsStalePendingSearch(t *testing.T) {
+	p := newPagedMock(t, 5, 0, 0)
+	m := pagedModel(t, p, 120, 30)
+	if m.next[tabTemplates] != "" {
+		t.Fatal("5 templates should arrive in a single complete page")
+	}
+
+	m = step(t, m, key("/"))
+
+	// "z" matches nothing, even in the description AWX would search, so
+	// this keystroke takes the server-search branch and leaves a request
+	// pending (never drained here, simulating it not having landed yet).
+	next, _ := m.Update(key("z"))
+	m = next.(Model)
+	if !m.searching[tabTemplates] {
+		t.Fatal("expected the no-match keystroke to mark the tab as searching")
+	}
+
+	// Backspacing to "t" matches every "template-NNN" row locally.
+	next, _ = m.Update(key("backspace"))
+	m = next.(Model)
+	next, _ = m.Update(key("t"))
+	m = next.(Model)
+
+	if m.searching[tabTemplates] {
+		t.Error("a local match left the tab stuck showing \"searching…\" from an earlier pending search")
+	}
+	if got := len(m.visible(tabTemplates)); got == 0 {
+		t.Error("expected the local match to be visible immediately")
+	}
+}
+
 // A list that is already complete is filtered locally, without a round trip.
 func TestCompleteListFiltersLocally(t *testing.T) {
 	p := newPagedMock(t, 5, 0, 0)
@@ -325,6 +360,119 @@ func TestJobsRefreshKeepsPagedRows(t *testing.T) {
 	}
 	if m.jobs[1].Status != "failed" {
 		t.Errorf("refreshed status = %q, want failed", m.jobs[1].Status)
+	}
+}
+
+// lastJobsPull must only move once a refresh's reply actually lands, not
+// the moment it is fired — otherwise the next refresh is due 5s after
+// firing, which for an AWX slower than the refresh interval means the next
+// tick piles another request on top of one still in flight.
+func TestJobsRefreshCountsFromCompletionNotFire(t *testing.T) {
+	p := newPagedMock(t, 1, 1, 0)
+	m := pagedModel(t, p, 120, 30)
+	m = step(t, m, key("2"))
+
+	due := time.Time{}
+	m.lastJobsPull = due
+	next, _ := m.Update(tickMsg(time.Now())) // fires the refresh; reply not drained
+	m = next.(Model)
+
+	if !m.jobsRefreshing {
+		t.Fatal("expected the refresh to be marked in flight right after firing")
+	}
+	if !m.lastJobsPull.Equal(due) {
+		t.Errorf("lastJobsPull moved at fire time (%v), want it to stay put until the reply lands", m.lastJobsPull)
+	}
+}
+
+// A refresh that takes longer than the refresh interval to answer must not
+// have a second one piled on top of it by the next tick.
+func TestJobsRefreshDoesNotStackWhileSlow(t *testing.T) {
+	p := newPagedMock(t, 1, 100, 0)
+	m := pagedModel(t, p, 120, 30)
+	m = step(t, m, key("2"))
+
+	before := p.count("/api/v2/unified_jobs/")
+	m.lastJobsPull = time.Time{} // force the refresh to be due
+
+	// Fire the refresh without draining its command, simulating AWX taking
+	// longer to answer than the refresh interval.
+	next, _ := m.Update(tickMsg(time.Now()))
+	m = next.(Model)
+	if !m.jobsRefreshing {
+		t.Fatal("expected the refresh to be marked in flight")
+	}
+
+	// A second tick arrives before the first reply has landed.
+	m = step(t, m, tickMsg(time.Now()))
+
+	if got := p.count("/api/v2/unified_jobs/"); got != before {
+		t.Errorf("a second refresh fired while the first was still outstanding: %d extra request(s)",
+			got-before)
+	}
+}
+
+// A refresh built before a pending search lands would still carry the
+// pre-search query, and could land after the search reply and be mistaken
+// for a fresher one, wiping the search out. It must be skipped for as long
+// as a search is in flight.
+func TestJobsRefreshSkippedWhileSearchPending(t *testing.T) {
+	p := newPagedMock(t, 1, 250, 0)
+	m := pagedModel(t, p, 120, 30)
+	m = step(t, m, key("2"))
+	m = step(t, m, key("/"))
+
+	// One keystroke, without draining its command: the debounce has been
+	// scheduled but has not fired. Leaving the search box (enter) returns to
+	// modeList while the search is still pending — exactly what the "search
+	// ansible-dns (esc to clear)" closed-box label in the bug report shows —
+	// which is the window a stale refresh could otherwise race into.
+	next, _ := m.Update(key("j"))
+	m = next.(Model)
+	next, _ = m.Update(key("enter"))
+	m = next.(Model)
+	if m.mode != modeList {
+		t.Fatalf("expected modeList after leaving the search box, got %v", m.mode)
+	}
+	if !m.searching[tabJobs] {
+		t.Fatal("expected the tab to still be marked searching right after the keystroke")
+	}
+
+	before := p.count("/api/v2/unified_jobs/")
+	m.lastJobsPull = time.Time{} // force the refresh to be due
+	m = step(t, m, tickMsg(time.Now()))
+
+	if got := p.count("/api/v2/unified_jobs/"); got != before {
+		t.Errorf("background refresh fired %d extra request(s) while a search was pending",
+			got-before)
+	}
+}
+
+// Once a search has landed, the periodic refresh resumes and must not
+// clobber it: it now reads the current serverQuery, not a stale pre-search
+// one, so it re-confirms the same results instead of replacing them.
+func TestJobsRefreshAfterSearchLandsKeepsResults(t *testing.T) {
+	p := newPagedMock(t, 1, 250, 0)
+	m := pagedModel(t, p, 120, 30)
+	m = step(t, m, key("2"))
+	m = step(t, m, key("/"))
+	m = typeText(t, m, "job-249") // settles fully: the search lands
+
+	if got := len(m.visible(tabJobs)); got != 1 {
+		t.Fatalf("search matched %d rows, want 1", got)
+	}
+	if m.searching[tabJobs] {
+		t.Fatal("search should have landed and cleared the searching flag")
+	}
+
+	m.lastJobsPull = time.Time{} // force the refresh to be due
+	m = step(t, m, tickMsg(time.Now()))
+
+	if m.serverQuery[tabJobs] != "job-249" {
+		t.Errorf("refresh after a landed search reset serverQuery to %q", m.serverQuery[tabJobs])
+	}
+	if got := len(m.visible(tabJobs)); got != 1 {
+		t.Errorf("refresh after a landed search left %d matching rows, want 1", got)
 	}
 }
 
@@ -435,6 +583,86 @@ func TestCountLabelReflectsPagingState(t *testing.T) {
 	// Names are zero-padded, so "template-1" matches the 100 in template-1xx.
 	if got := m.countLabel(tabTemplates); got != "100 matching" {
 		t.Errorf("searched label = %q, want %q", got, "100 matching")
+	}
+}
+
+// A keystroke that needs the server must mark the tab as searching before
+// the 250ms debounce even fires: the count label must not show a stale local
+// count (e.g. "0 matched · 100") as if it were AWX's final answer.
+func TestSearchMarksPendingBeforeDebounceFires(t *testing.T) {
+	p := newPagedMock(t, 450, 0, 0)
+	m := pagedModel(t, p, 120, 30)
+	m = step(t, m, key("/"))
+
+	// Apply one keystroke without draining its command, so the debounce
+	// timer has not fired yet — this is the window the bug lived in.
+	next, _ := m.Update(key("t"))
+	m = next.(Model)
+
+	if !m.searching[tabTemplates] {
+		t.Fatal("typing must mark the tab as searching before the debounce fires")
+	}
+	if got := m.countLabel(tabTemplates); got != "searching…" {
+		t.Errorf("count label = %q, want %q while a search is pending", got, "searching…")
+	}
+}
+
+// A failed search must not leave the tab permanently stuck: the flags that
+// drive "searching…" have to clear even when AWX errors out, or the tab
+// never recovers to show its real state again.
+func TestFailedSearchClearsPerTabFlags(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v2/me/":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"count": 1, "results": []any{map[string]any{"username": "admin"}}})
+		case r.URL.Path == "/api/v2/job_templates/" && r.URL.Query().Get("search") != "":
+			// A 4xx, not a 5xx: GETs retry 5xx and network errors, which would
+			// make this test wait out several backoff rounds for nothing.
+			http.Error(w, "boom", http.StatusBadRequest)
+		case r.URL.Path == "/api/v2/job_templates/":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"count": 1, "next": nil,
+				"results": []any{map[string]any{"id": 1, "name": "template-000"}}})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"count": 0, "next": nil, "results": []any{}})
+		}
+	}))
+	defer srv.Close()
+
+	m := New(awx.New(srv.URL, "t", false))
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = step(t, m, m.connect())
+
+	m = step(t, m, key("/"))
+	m = typeText(t, m, "boom") // no local match, so this falls back to AWX
+
+	if m.err == nil {
+		t.Fatal("expected the failed search request to surface an error")
+	}
+	if m.searching[tabTemplates] {
+		t.Error("a failed search left the tab stuck showing \"searching…\"")
+	}
+	if m.fetching[tabTemplates] {
+		t.Error("a failed search left the tab stuck with a page-loading suffix")
+	}
+}
+
+// A filtered list must not auto-page beyond what the cursor needs: matches
+// are often sparse, and filling the screen would walk the whole list.
+func TestContinueLoadDoesNotAutoFillDuringActiveFilter(t *testing.T) {
+	p := newPagedMock(t, 5, 0, 0)
+	m := pagedModel(t, p, 120, 30)
+
+	m.filters[tabTemplates] = "template"
+	m.next[tabTemplates] = p.URL + "/api/v2/job_templates/?page=2"
+	if cmd := m.continueLoad(tabTemplates); cmd != nil {
+		t.Error("continueLoad must not auto-fetch while a filter is active")
+	}
+
+	m.filters[tabTemplates] = ""
+	if cmd := m.continueLoad(tabTemplates); cmd == nil {
+		t.Error("continueLoad should still top up an unfiltered, under-full list")
 	}
 }
 

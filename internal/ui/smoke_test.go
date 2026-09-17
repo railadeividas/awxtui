@@ -568,6 +568,15 @@ func settle(t *testing.T, m Model, msg tea.Msg, depth int) Model {
 	return m
 }
 
+// Tests override the real, user-tunable searchDelay so the mock-server suite
+// stays fast regardless of how long a real user's typing pause is set to.
+// Live tests exercise the real value against real AWX timing.
+func init() {
+	if os.Getenv("AWXTUI_LIVE") == "" {
+		searchDelay = 20 * time.Millisecond
+	}
+}
+
 // drainTimeout bounds how long drain waits for one command. Against the mock
 // server real work is local HTTP (sub-millisecond), so anything slower is a UI
 // timer such as a poll tick, which the tests do not care about. Live tests talk

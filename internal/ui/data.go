@@ -102,9 +102,12 @@ type (
 		what    string
 		started []awx.Job
 	}
+	// errMsg carries the tab whose request failed, so its fetching/searching
+	// state can be reset; tab is tabCount for requests not tied to a list.
 	errMsg struct {
 		err error
 		gen int
+		tab tab
 	}
 	tickMsg time.Time
 )
@@ -141,7 +144,7 @@ func (m Model) connect() tea.Msg {
 	defer cancel()
 	user, err := m.client.Me(ctx)
 	if err != nil {
-		return errMsg{err: err, gen: m.gen}
+		return errMsg{err: err, gen: m.gen, tab: tabCount}
 	}
 	return connectedMsg{user: user, gen: m.gen}
 }
@@ -164,7 +167,7 @@ func (m *Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			defer cancel()
 			p, err := c.JobTemplates(ctx, pageURL, search)
 			if err != nil {
-				return errMsg{err: err, gen: gen}
+				return errMsg{err: err, gen: gen, tab: tabTemplates}
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return templatesMsg{pageMeta: meta, items: p.Results}
@@ -179,7 +182,7 @@ func (m *Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			defer cancel()
 			p, err := c.UnifiedJobs(ctx, pageURL, search, filter)
 			if err != nil {
-				return errMsg{err: err, gen: gen}
+				return errMsg{err: err, gen: gen, tab: tabJobs}
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return jobsMsg{pageMeta: meta, items: p.Results}
@@ -190,7 +193,7 @@ func (m *Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			defer cancel()
 			p, err := c.Inventories(ctx, pageURL, search)
 			if err != nil {
-				return errMsg{err: err, gen: gen}
+				return errMsg{err: err, gen: gen, tab: tabInventories}
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return inventoriesMsg{pageMeta: meta, items: p.Results}
@@ -201,7 +204,7 @@ func (m *Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			defer cancel()
 			p, err := c.Projects(ctx, pageURL, search)
 			if err != nil {
-				return errMsg{err: err, gen: gen}
+				return errMsg{err: err, gen: gen, tab: tabProjects}
 			}
 			meta.next, meta.count = p.Next, p.Count
 			return projectsMsg{pageMeta: meta, items: p.Results}
@@ -236,7 +239,7 @@ func (m Model) pinnedCmd(t tab, meta pageMeta) tea.Cmd {
 		case tabJobs:
 			found, err := c.UnifiedJobsByID(ctx, ids)
 			if err != nil {
-				return errMsg{err: err, gen: gen}
+				return errMsg{err: err, gen: gen, tab: tabJobs}
 			}
 			// The other facets are applied here rather than by AWX: a pinned
 			// set is small and already in hand, and id__in plus a status
@@ -258,19 +261,19 @@ func (m Model) pinnedCmd(t tab, meta pageMeta) tea.Cmd {
 		case tabTemplates:
 			found, err := c.JobTemplatesByID(ctx, ids)
 			if err != nil {
-				return errMsg{err: err, gen: gen}
+				return errMsg{err: err, gen: gen, tab: tabTemplates}
 			}
 			return templatesMsg{pageMeta: meta, items: inPinnedOrder(ids, found, templateID)}
 		case tabInventories:
 			found, err := c.InventoriesByID(ctx, ids)
 			if err != nil {
-				return errMsg{err: err, gen: gen}
+				return errMsg{err: err, gen: gen, tab: tabInventories}
 			}
 			return inventoriesMsg{pageMeta: meta, items: inPinnedOrder(ids, found, inventoryID)}
 		default:
 			found, err := c.ProjectsByID(ctx, ids)
 			if err != nil {
-				return errMsg{err: err, gen: gen}
+				return errMsg{err: err, gen: gen, tab: tabProjects}
 			}
 			return projectsMsg{pageMeta: meta, items: inPinnedOrder(ids, found, projectID)}
 		}
@@ -301,7 +304,7 @@ func (m *Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea
 		defer cancel()
 		p, err := c.Hosts(ctx, inventoryID, pageURL, "")
 		if err != nil {
-			return errMsg{err: err, gen: gen}
+			return errMsg{err: err, gen: gen, tab: tabCount}
 		}
 		return hostsMsg{
 			pageMeta:  pageMeta{next: p.Next, count: p.Count, cont: cont, gen: gen},
@@ -324,7 +327,7 @@ func (m *Model) fetchOutput(res awx.Resource, jobID, after int) tea.Cmd {
 		defer cancel()
 		job, err := c.UnifiedJob(ctx, res, jobID)
 		if err != nil {
-			return errMsg{err: err, gen: gen}
+			return errMsg{err: err, gen: gen, tab: tabCount}
 		}
 
 		if after == 0 && !job.IsRunning() {
@@ -339,7 +342,7 @@ func (m *Model) fetchOutput(res awx.Resource, jobID, after int) tea.Cmd {
 
 		events, err := c.JobEvents(ctx, res, jobID, after)
 		if err != nil {
-			return errMsg{err: err, gen: gen}
+			return errMsg{err: err, gen: gen, tab: tabCount}
 		}
 		var b strings.Builder
 		last := after
@@ -370,7 +373,7 @@ func (m *Model) launch(templateID int, payload map[string]any) tea.Cmd {
 		defer cancel()
 		job, err := c.Launch(ctx, templateID, payload)
 		if err != nil {
-			return errMsg{err: err, gen: gen}
+			return errMsg{err: err, gen: gen, tab: tabCount}
 		}
 		return launchedMsg{job: job, gen: gen}
 	})
@@ -386,13 +389,13 @@ func (m *Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 		defer cancel()
 		cfg, err := c.LaunchConfig(ctx, t.ID)
 		if err != nil {
-			return errMsg{err: err, gen: gen}
+			return errMsg{err: err, gen: gen, tab: tabCount}
 		}
 		msg := launchFormMsg{gen: gen, template: t, config: cfg}
 		if cfg.SurveyEnabled {
 			spec, err := c.SurveySpec(ctx, t.ID)
 			if err != nil {
-				return errMsg{err: err, gen: gen}
+				return errMsg{err: err, gen: gen, tab: tabCount}
 			}
 			msg.survey = spec
 		}
@@ -425,7 +428,7 @@ func (m *Model) cancelJob(res awx.Resource, jobID int) tea.Cmd {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		if err := c.Cancel(ctx, res, jobID); err != nil {
-			return errMsg{err: err, gen: gen}
+			return errMsg{err: err, gen: gen, tab: tabCount}
 		}
 		return canceledMsg{id: jobID, gen: gen}
 	})
@@ -439,7 +442,7 @@ func (m *Model) syncProject(p awx.Project) tea.Cmd {
 		defer cancel()
 		job, err := c.UpdateProject(ctx, p.ID)
 		if err != nil {
-			return errMsg{err: fmt.Errorf("sync project %s: %w", p.Name, err), gen: gen}
+			return errMsg{err: fmt.Errorf("sync project %s: %w", p.Name, err), gen: gen, tab: tabCount}
 		}
 		return syncedMsg{gen: gen, what: "project " + p.Name, started: []awx.Job{job}}
 	})
@@ -459,7 +462,7 @@ func (m *Model) syncInventory(inv awx.Inventory) tea.Cmd {
 			if len(started) > 0 {
 				wrapped = fmt.Errorf("%w (%d source(s) already started)", wrapped, len(started))
 			}
-			return errMsg{err: wrapped, gen: gen}
+			return errMsg{err: wrapped, gen: gen, tab: tabCount}
 		}
 		return syncedMsg{gen: gen, what: "inventory " + inv.Name, started: started}
 	})

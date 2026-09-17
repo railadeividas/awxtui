@@ -60,9 +60,12 @@ const (
 	// loadMoreWithin triggers the next page once the cursor comes this close
 	// to the end of what is loaded.
 	loadMoreWithin = 10
-	// searchDelay is how long typing must settle before AWX is queried.
-	searchDelay = 250 * time.Millisecond
 )
+
+// searchDelay is how long typing must settle before AWX is queried. A var,
+// not a const: tests override it to keep the mock-server suite fast without
+// changing the real, user-tunable value.
+var searchDelay = 400 * time.Millisecond
 
 // Model is the whole application state.
 type Model struct {
@@ -157,6 +160,10 @@ type Model struct {
 	notice       string
 	err          error
 	lastJobsPull time.Time
+	// jobsRefreshing is true from the moment the periodic background
+	// refresh is fired until its reply lands, so a slow AWX cannot cause
+	// the next tick to pile another refresh on top of it.
+	jobsRefreshing bool
 }
 
 // Option configures the model at construction.
@@ -259,7 +266,11 @@ func (m *Model) nextPage(t tab) tea.Cmd {
 // continueLoad pulls another page when what is loaded would not even fill the
 // screen. Everything else is paged in on demand as the user scrolls.
 func (m *Model) continueLoad(t tab) tea.Cmd {
-	if len(m.visible(t)) >= m.tableHeight() {
+	// A filtered/searched list is not auto-filled: matches are often sparse
+	// relative to the screen, which would otherwise page through the whole
+	// list hunting for enough of them. Only the cursor (loadMore) pages a
+	// filtered list further.
+	if m.filters[t] != "" || len(m.visible(t)) >= m.tableHeight() {
 		return nil
 	}
 	return m.nextPage(t)
@@ -325,6 +336,7 @@ func (m *Model) load(t tab, force bool) tea.Cmd {
 func (m *Model) runSearch(t tab) tea.Cmd {
 	query := strings.TrimSpace(m.filters[t])
 	if query == m.serverQuery[t] {
+		m.searching[t] = false // already showing this query's results
 		return nil
 	}
 	m.searching[t] = true
@@ -429,8 +441,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outputRetries++
 			cmds = append(cmds, m.fetchOutput(m.outputJob.Resource(), m.outputJob.ID, 0))
 		}
-		if m.mode == modeList && m.active == tabJobs && time.Since(m.lastJobsPull) >= jobsAutoRefresh {
-			m.lastJobsPull = time.Now()
+		// Skipped while a search is in flight: a refresh built before it
+		// lands would still carry the pre-search query, and could land after
+		// the search reply and be mistaken for a fresher one, wiping it out.
+		// Also skipped while a previous refresh is still outstanding — AWX
+		// can answer slower than the refresh interval, and without this a
+		// slow reply would be piled on by another before it even lands.
+		// lastJobsPull only moves forward when a reply actually arrives
+		// (jobsMsg), so the next refresh is due 5s after the last one
+		// finished, not 5s after it was fired.
+		if m.mode == modeList && m.active == tabJobs && !m.searching[tabJobs] &&
+			!m.jobsRefreshing && time.Since(m.lastJobsPull) >= jobsAutoRefresh {
+			m.jobsRefreshing = true
 			cmds = append(cmds, m.fetch(tabJobs, "", m.serverQuery[tabJobs], false))
 		}
 		return m, tea.Batch(cmds...)
@@ -468,9 +490,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case jobsMsg:
 		if msg.gen != m.gen || msg.seq != m.searchSeq[tabJobs] {
-			return m, nil // a newer search, or another instance, has replaced it
+			// Whatever fired this reply — the periodic refresh or anything
+			// else — has been superseded; drop it, but do not leave the
+			// refresh permanently unable to fire again because its own
+			// reply was the one just dropped here.
+			m.jobsRefreshing = false
+			return m, nil
 		}
-		m.fetching[tabJobs], m.searching[tabJobs] = false, false
+		m.fetching[tabJobs], m.searching[tabJobs], m.jobsRefreshing = false, false, false
 		// A background refresh re-reads page one; merge it so the pages the
 		// user already scrolled through are not thrown away.
 		merged := false
@@ -629,6 +656,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.syncing = false
 		m.err = msg.err
+		if msg.tab < tabCount {
+			m.fetching[msg.tab], m.searching[msg.tab] = false, false
+		}
+		if msg.tab == tabJobs {
+			m.jobsRefreshing = false
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -674,13 +707,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filterInput, cmd = m.filterInput.Update(msg)
 		m.filters[m.active] = m.filterInput.Value()
 		m.cursor[m.active], m.offset[m.active] = 0, 0
+		// Every keystroke bumps the sequence, even one answered locally: an
+		// earlier keystroke may have a server search still in flight, and
+		// without this its reply would still carry the current seq and be
+		// mistaken for current when it lands, rather than being dropped as
+		// stale by the seq check in each xMsg handler.
+		m.searchSeq[m.active]++
 		// Ask AWX when the list is incomplete, and also when a complete list
 		// matches nothing locally: the server searches fields we do not show,
 		// such as descriptions.
 		if m.searchable(m.active) || len(m.visible(m.active)) == 0 {
-			m.searchSeq[m.active]++
+			// Mark the search pending now, not once the debounce fires: the
+			// count label and row list must not assert a final answer (like
+			// "0 matched") for the ~250ms+network window before AWX replies.
+			m.searching[m.active] = true
 			return m, tea.Batch(cmd, searchDebounce(m.active, m.searchSeq[m.active]))
 		}
+		// A complete list with a local match answers this keystroke
+		// instantly: any earlier search still in flight for this tab is now
+		// irrelevant, so the row list must not keep waiting on it.
+		m.searching[m.active] = false
 		return m, tea.Batch(cmd, m.continueLoad(m.active))
 
 	case modeLaunch:
