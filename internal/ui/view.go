@@ -282,10 +282,13 @@ func (m Model) hostsBody() string {
 	return b.String()
 }
 
-// pane centres content in the body area.
+// pane centres content horizontally in the body area, but keeps it flush to
+// the top vertically so the closing rule and legend follow immediately, the
+// same as listBody and outputView — a modal shorter than the body area used
+// to leave a gap of blank rows above the legend from vertical centering.
 func (m Model) pane(content string) string {
 	h := m.tableHeight() + 1
-	return lipgloss.Place(m.width, h, lipgloss.Center, lipgloss.Center, clip(content, h))
+	return lipgloss.Place(m.width, h, lipgloss.Center, lipgloss.Top, clip(content, h))
 }
 
 // clip drops lines that would not fit in h, keeping the view inside the screen.
