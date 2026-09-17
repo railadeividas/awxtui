@@ -285,6 +285,11 @@ func (m Model) launchModal() string {
 		head.WriteString("\n" + warnStyle.Render("read-only mode: this form cannot be submitted"))
 	}
 
+	if f.submitting {
+		body := "\n\n  " + m.spin.View() + dimStyle.Render(" submitting…")
+		return modalStyle.Width(inner).Render(head.String() + body + "\n")
+	}
+
 	var body string
 	if f.canStartImmediately() {
 		body = "\n\n" + rowStyle.Render("This template needs no input.") + "\n"

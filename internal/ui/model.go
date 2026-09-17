@@ -611,6 +611,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.notice = fmt.Sprintf("launched job #%d", msg.job.ID)
 		m.loaded[tabJobs] = false
+		m.form = form{}
 		cmd := m.openOutput(msg.job)
 		return m, tea.Batch(cmd, m.fetch(tabJobs, "", m.serverQuery[tabJobs], false))
 
@@ -647,6 +648,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.tab == tabJobs {
 			m.jobsRefreshing = false
+		}
+		// A failed launch drops back into the editable form rather than
+		// leaving it stuck on "submitting…", so the user can fix it and retry.
+		if m.mode == modeLaunch && m.form.submitting {
+			m.form.submitting = false
+			m.form.problem = msg.err.Error()
+			m.err = nil
 		}
 		return m, nil
 
@@ -716,6 +724,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.continueLoad(m.active))
 
 	case modeLaunch:
+		if m.form.submitting {
+			if key == "ctrl+c" {
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		switch key {
 		case "esc":
 			m.mode = modeList
@@ -744,8 +758,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		id := m.form.template.ID
-		m.mode = modeList
-		m.form = form{}
+		m.form.submitting = true
+		m.form.problem = ""
 		m.err = nil
 		return m, m.launch(id, payload)
 

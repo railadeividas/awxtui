@@ -143,6 +143,11 @@ type form struct {
 	offset   int
 	problem  string
 	width    int
+
+	// submitting is set once launch is submitted and cleared only when
+	// launchedMsg or errMsg answers it, so the modal stays up showing a
+	// "submitting…" message rather than flashing back to the list.
+	submitting bool
 }
 
 func newInput(value, placeholder string, width int) textinput.Model {
