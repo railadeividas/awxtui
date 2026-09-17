@@ -144,6 +144,10 @@ type form struct {
 	problem  string
 	width    int
 
+	// pickOffset scrolls the full-list picker opened on the focused
+	// fMultiChoice field; it is meaningless otherwise.
+	pickOffset int
+
 	// submitting is set once launch is submitted and cleared only when
 	// launchedMsg or errMsg answers it, so the modal stays up showing a
 	// "submitting…" message rather than flashing back to the list.
@@ -441,6 +445,14 @@ func newForm(src launchFormMsg, width int) form {
 
 // canStartImmediately reports whether there is nothing to fill in.
 func (f form) canStartImmediately() bool { return len(f.fields) == 0 }
+
+// focused returns the field the cursor is on, or nil once the form is empty.
+func (f *form) focused() *formField {
+	if f == nil || f.cursor < 0 || f.cursor >= len(f.fields) {
+		return nil
+	}
+	return &f.fields[f.cursor]
+}
 
 func (f *form) moveCursor(delta int) {
 	if len(f.fields) == 0 {

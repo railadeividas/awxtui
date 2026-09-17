@@ -58,6 +58,8 @@ func (m Model) View() string {
 		b.WriteString(m.pane(m.inventoryModal()))
 	case modeShow:
 		b.WriteString(m.pane(m.showModal()))
+	case modePick:
+		b.WriteString(m.pane(m.pickerModal()))
 	case modeHosts:
 		b.WriteString(m.hostsBody())
 	default:
@@ -310,7 +312,8 @@ func (m Model) launchModal() string {
 		case fChoice:
 			keys = append(keys, [2]string{"←→", "choose"})
 		case fMultiChoice:
-			keys = append(keys, [2]string{"←→", "move"}, [2]string{"space", "toggle"})
+			keys = [][2]string{{"ctrl+s", "launch"}, {"↑↓", "field"},
+				{"←→", "move"}, {"space", "toggle"}, {"enter", "list"}}
 		case fTextarea:
 			keys = [][2]string{{"ctrl+s", "launch"}, {"↑↓", "field"}, {"enter", "newline"}}
 		}
@@ -523,6 +526,15 @@ func (m Model) statusView() string {
 	case modeShow:
 		keys = plainKeys([][2]string{{"↑↓", "choose"}, {"←→", "set"}, {"c", "clear"},
 			{"enter", "apply"}, {"esc", "cancel"}})
+	case modePick:
+		keys = plainKeys([][2]string{{"↑↓", "move"}, {"space", "toggle"}, {"a", "all"},
+			{"c", "none"}, {"enter", "done"}})
+	case modeLaunch:
+		// The form's own footer (launchModal) spells out what enter does on
+		// the focused field; the status bar just needs the keys that always
+		// work. q is not one of them here — it types into a text field
+		// rather than quitting, unlike every list view.
+		keys = plainKeys([][2]string{{"↑↓", "field"}, {"ctrl+s", "launch"}, {"esc", "cancel"}})
 	default:
 		keys = m.listKeys()
 	}

@@ -41,6 +41,7 @@ const (
 	modeProject
 	modeInventory
 	modeShow
+	modePick
 )
 
 const (
@@ -762,6 +763,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+c":
 			return m, tea.Quit
+		case "enter":
+			// A multi-select's catalogue can run to dozens of entries that
+			// never fit the field's one-line window; enter opens the full
+			// list instead of submitting, and ctrl+s launches from here on.
+			if fl := m.form.focused(); fl != nil && fl.kind == fMultiChoice {
+				m.openPicker()
+				return m, nil
+			}
 		}
 		submit, cmd := m.form.update(msg)
 		if !submit {
@@ -803,6 +812,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case modeShow:
 		return m.handleShowKey(msg)
+
+	case modePick:
+		return m.handlePickKey(msg)
 
 	case modeOutput:
 		return m.handleOutputKey(msg)

@@ -105,7 +105,7 @@ AWX has said who you are.
 | `h` | inside inventory details: list its hosts |
 | `p` | pin the highlighted record, or the run whose output is open |
 | `f` | narrow the view: pinned only, and on Jobs also owner, status and kind |
-| `↑↓` / `tab` | move between fields in the launch form; `←→` pick a choice, `space` toggles a multiselect, `ctrl+s` submits |
+| `↑↓` / `tab` | move between fields in the launch form; `←→` pick a choice, `space` toggles a multiselect, `enter` on a multiselect opens its full list, `ctrl+s` submits |
 | `c` | cancel a running job |
 | `f` | in the job output view: toggle follow mode |
 | `r` | refresh |
@@ -135,11 +135,14 @@ prompted for are sent.
 Credentials, instance groups and labels are multi-selects (`←→` to move,
 `space` to toggle) holding the whole catalogue — 19 instance groups and 52
 credentials on the instance this was built against — so they render as a window
-with a count of what is scrolled out of view. The template's own values start
-selected, and one that is past the page cap is added to the list rather than
-quietly dropped: deselecting a credential a template needs would launch a job
-that cannot authenticate. The execution environment keeps a "template default"
-entry, which sends no key at all.
+with a count of what is scrolled out of view. `enter` on one opens a full-screen
+picker instead, listing every entry vertically and scrolling like any other
+list (`↑↓` move, `space` toggle, `a` select all, `c` clear, `enter`/`esc`
+closes back to the form); this also applies to a survey `multiselect` question.
+The template's own values start selected, and one that is past the page cap is
+added to the list rather than quietly dropped: deselecting a credential a
+template needs would launch a job that cannot authenticate. The execution
+environment keeps a "template default" entry, which sends no key at all.
 
 Job output follows live while the job runs, and the Jobs list refreshes itself
 every few seconds.

@@ -256,6 +256,102 @@ func TestLaunchFormFitsWithALargeCatalogue(t *testing.T) {
 	}())
 }
 
+// q does nothing in the launch form — it either types into a text field or
+// is silently dropped on a choice field — so the status bar must not offer
+// it as "quit" the way every list view does.
+func TestLaunchFormStatusBarDoesNotOfferQuit(t *testing.T) {
+	srv := mockAWX(t)
+	m := openTemplateForm(t, srv, "Deploy web app")
+	foot := lastLine(m)
+	if strings.Contains(foot, "q quit") {
+		t.Errorf("status bar %q offers q quit, but q has no effect in the launch form", foot)
+	}
+	if !strings.Contains(foot, "esc") {
+		t.Errorf("status bar %q should still say how to leave the form", foot)
+	}
+}
+
+// The full-list picker opened from a multi-select field lists the whole
+// catalogue vertically, scrolled to the highlighted entry, so an entry far
+// past what the field's own windowed line can show is still reachable.
+func TestMultiChoicePickerListsWholeCatalogueAndToggles(t *testing.T) {
+	srv := mockAWX(t)
+	base := openTemplateForm(t, srv, "Deploy web app")
+	groups := make([]awx.InstanceGroup, 60)
+	for i := range groups {
+		groups[i] = awx.InstanceGroup{ID: i + 1, Name: fmt.Sprintf("tower-region-%02d-executors", i)}
+	}
+	msg := launchFormMsg{
+		gen: base.gen, template: base.form.template, config: base.form.config,
+		inventories: []awx.Inventory{{ID: 3, Name: "production"}}, instanceGroups: groups,
+	}
+	m := New(awx.New(srv.URL, "test-token", false))
+	m = step(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = step(t, m, m.connect())
+	m = step(t, m, msg)
+	m = focusField(t, m, "instance_groups")
+
+	m = step(t, m, key("enter"))
+	if m.mode != modePick {
+		t.Fatalf("enter on a multi-select field should open the picker, got mode %v", m.mode)
+	}
+	show(t, "instance groups picker", m.View())
+
+	// The picker itself must fit the terminal, at every size, the same as
+	// every other view.
+	for _, size := range [][2]int{{80, 24}, {120, 40}, {200, 50}} {
+		sized := step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		out := sized.View()
+		for i, line := range strings.Split(out, "\n") {
+			if w := lineWidth(line); w > size[0] {
+				t.Errorf("%dx%d picker: line %d is %d cols wide", size[0], size[1], i, w)
+			}
+		}
+		if lines := strings.Count(out, "\n") + 1; lines > size[1] {
+			t.Errorf("%dx%d picker: view is %d lines, terminal has %d", size[0], size[1], lines, size[1])
+		}
+	}
+
+	// Jump to the far end of the catalogue and tick the last entry: the
+	// window in the field's own line could never reach it directly.
+	m = step(t, m, key("G"))
+	if got := fieldByKey(t, &m, "instance_groups"); got.idx != 59 {
+		t.Fatalf("G should move the highlight to the last entry, got idx %d", got.idx)
+	}
+	m = step(t, m, key("space"))
+	show(t, "instance groups picker at the end", m.View())
+
+	m = step(t, m, key("esc"))
+	if m.mode != modeLaunch {
+		t.Fatalf("esc should close the picker back to the form, got mode %v", m.mode)
+	}
+	fl := fieldByKey(t, &m, "instance_groups")
+	if want := []string{"tower-region-59-executors"}; !equalStrings(fl.selections(), want) {
+		t.Errorf("selections after the picker = %v, want %v", fl.selections(), want)
+	}
+	if ids := fl.selectedIDs(); len(ids) != 1 || ids[0] != 60 {
+		t.Errorf("selectedIDs = %v, want [60]", ids)
+	}
+
+	// "a" selects everything and "c" clears it, both from inside the picker.
+	m = step(t, m, key("enter")) // reopen
+	if m.mode != modePick {
+		t.Fatalf("enter should reopen the picker, got mode %v", m.mode)
+	}
+	m = step(t, m, key("a"))
+	if got := len(fieldByKey(t, &m, "instance_groups").selections()); got != 60 {
+		t.Fatalf("a should select every entry, got %d of 60", got)
+	}
+	m = step(t, m, key("c"))
+	if got := len(fieldByKey(t, &m, "instance_groups").selections()); got != 0 {
+		t.Fatalf("c should clear every entry, got %d selected", got)
+	}
+	m = step(t, m, key("enter"))
+	if m.mode != modeLaunch {
+		t.Fatalf("enter should close the picker back to the form, got mode %v", m.mode)
+	}
+}
+
 // Without a catalogue there is nothing to choose from, and offering an empty
 // multi-select would submit "none" — dropping the template's own credentials.
 func TestIDListFieldSkipsEmptyCatalogue(t *testing.T) {
