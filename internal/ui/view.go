@@ -289,7 +289,11 @@ func (m Model) hostsBody() string {
 // and outputView fill, just distributed inside the border instead of outside
 // it.
 func (m Model) pane(content string) string {
-	h := m.tableHeight() + 1
+	// View adds three rows before the pane (header, tabs and rule) and two
+	// after it (closing rule and status bar).  The table budget is height-7,
+	// so the pane needs two rows more to fill the remaining height exactly.
+	// One row more leaves a terminal row below the legend in every modal.
+	h := m.tableHeight() + 2
 	return lipgloss.Place(m.width, h, lipgloss.Center, lipgloss.Top, clip(growBox(content, h), h))
 }
 

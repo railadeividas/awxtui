@@ -19,6 +19,17 @@ func lastLine(m Model) string {
 	return stripANSI(lines[len(lines)-1])
 }
 
+func TestPaneFillsTheBodyBudget(t *testing.T) {
+	m := Model{width: 100, height: 30}
+	content := modalStyle.Width(40).Render("details")
+
+	// View renders three lines before a pane and two after it.  A shorter
+	// pane leaves a conspicuous blank terminal row under the status legend.
+	if got, want := countLines(m.pane(content)), m.height-5; got != want {
+		t.Errorf("pane height = %d, want %d", got, want)
+	}
+}
+
 // The legend is how you leave a screen, so a notice must sit beside it rather
 // than take its place.
 func TestFooterKeepsLegendBesideANotice(t *testing.T) {
