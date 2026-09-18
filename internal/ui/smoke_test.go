@@ -541,6 +541,35 @@ func mockAWX(t *testing.T) *mock {
 			},
 		})
 	})
+	// A workflow job's nodes: one already finished, one still running, one
+	// AWX has not reached yet (job: null), and one on the untaken branch of
+	// a success/failure edge (do_not_run: true) — real AWX creates every
+	// node up front and fills job/summary_fields.job in only once it starts.
+	node := func(id int, name string, jobID int, status string, doNotRun bool) any {
+		n := map[string]any{
+			"id": id, "job": jobID, "do_not_run": doNotRun,
+			"summary_fields": map[string]any{
+				"unified_job_template": map[string]any{"name": name, "unified_job_type": "job"},
+			},
+		}
+		if jobID != 0 {
+			n["summary_fields"].(map[string]any)["job"] = map[string]any{
+				"id": jobID, "name": name, "status": status,
+			}
+		}
+		return n
+	}
+	mux.HandleFunc("/api/v2/workflow_jobs/11/workflow_nodes/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, page(
+			node(101, "backup fleet", 91, "successful", false),
+			node(102, "rotate certs", 92, "running", false),
+			node(103, "notify on failure", 0, "", true),
+			node(104, "smoke test", 0, "", false),
+		))
+	})
+	mux.HandleFunc("/api/v2/workflow_jobs/44/workflow_nodes/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, page(node(201, "rollout wave 1", 0, "", false)))
+	})
 
 	// ---- syncing ----
 	//
@@ -958,7 +987,7 @@ func TestEveryViewRendersWithinTerminalBounds(t *testing.T) {
 		m := New(awx.New(srv.URL, "test-token", false))
 		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = step(t, m, m.connect())
-		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc", "6", "enter", "G", "esc"} {
+		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc", "6", "enter", "G", "esc", "2", "G", "enter", "esc"} {
 			m = step(t, m, key(k))
 			out := m.View()
 			for i, line := range strings.Split(out, "\n") {

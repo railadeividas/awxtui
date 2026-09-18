@@ -340,6 +340,72 @@ func (c *Client) WorkflowJobTemplatesByID(ctx context.Context, ids []int) ([]Wor
 	return listByIDs[WorkflowJobTemplate](ctx, c, "/api/v2/workflow_job_templates/", ids)
 }
 
+// WorkflowNode is one node of a workflow job's graph: what it runs and, once
+// the workflow reaches it, the job that ran. Real AWX leaves Job at 0 and
+// SummaryFields.Job empty until the node starts, and sets DoNotRun on a node
+// on the untaken branch of a success/failure edge — it is created for every
+// node up front, whether or not the workflow ever runs it.
+type WorkflowNode struct {
+	ID            int    `json:"id"`
+	Identifier    string `json:"identifier"`
+	JobID         int    `json:"job"`
+	DoNotRun      bool   `json:"do_not_run"`
+	SummaryFields struct {
+		UnifiedJobTemplate struct {
+			Name           string `json:"name"`
+			UnifiedJobType string `json:"unified_job_type"`
+		} `json:"unified_job_template"`
+		Job struct {
+			ID      int     `json:"id"`
+			Name    string  `json:"name"`
+			Status  string  `json:"status"`
+			Failed  bool    `json:"failed"`
+			Elapsed float64 `json:"elapsed"`
+		} `json:"job"`
+	} `json:"summary_fields"`
+}
+
+// Status reports the node's status for display: "skipped" for a node AWX
+// decided not to run, "pending" for one the workflow has not reached yet —
+// neither is a status real AWX ever puts in summary_fields.job.status, which
+// is empty until the node has a job.
+func (n WorkflowNode) Status() string {
+	switch {
+	case n.DoNotRun:
+		return "skipped"
+	case n.JobID == 0:
+		return "pending"
+	default:
+		return n.SummaryFields.Job.Status
+	}
+}
+
+// Name is what the node runs, for display. A node identifier names the node
+// itself and is usually empty unless the workflow's graph set one.
+func (n WorkflowNode) Name() string {
+	if name := n.SummaryFields.UnifiedJobTemplate.Name; name != "" {
+		return name
+	}
+	return n.Identifier
+}
+
+// WorkflowNodes returns a page of a workflow job's nodes, in the order AWX
+// created them — the order they were added to the workflow, which is close
+// enough to execution order for a flat list without rendering the graph
+// itself.
+func (c *Client) WorkflowNodes(ctx context.Context, pageURL string, workflowJobID int) (Page[WorkflowNode], error) {
+	first := listURL(fmt.Sprintf("/api/v2/workflow_jobs/%d/workflow_nodes/", workflowJobID), "id", PageSize, "")
+	return listPage[WorkflowNode](ctx, c, firstOr(pageURL, first))
+}
+
+// AllWorkflowNodes walks every page of a workflow job's nodes, up to
+// maxPages.
+func (c *Client) AllWorkflowNodes(ctx context.Context, workflowJobID, maxPages int) ([]WorkflowNode, error) {
+	return allPages(ctx, maxPages, func(ctx context.Context, pageURL, _ string) (Page[WorkflowNode], error) {
+		return c.WorkflowNodes(ctx, pageURL, workflowJobID)
+	})
+}
+
 // Schedule is a recurrence rule that launches a job template, project
 // update, inventory sync or system job on its own. AWX auto-creates a few
 // system-job schedules (cleanup, activity stream) alongside user ones.

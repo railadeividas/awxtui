@@ -158,6 +158,63 @@ func TestReadOnlyModeBlocksWorkflowLaunch(t *testing.T) {
 	}
 }
 
+// TestWorkflowJobDetailsShowItsNodes checks that opening a workflow job's
+// launch details also lists its nodes: a finished one, a running one, one
+// AWX has not reached yet, and one on the untaken branch of a success/
+// failure edge — the four states a node can be in before it has a job of
+// its own to show a real status for.
+func TestWorkflowJobDetailsShowItsNodes(t *testing.T) {
+	m, _ := openTab(t, "2")
+	for i, r := range m.visible(tabJobs) {
+		if r.id == 11 {
+			m.cursor[tabJobs] = i
+		}
+	}
+	m = step(t, m, key("enter"))
+	if m.mode != modeJob {
+		t.Fatalf("expected launch details, got mode %v (err %v)", m.mode, m.err)
+	}
+	if m.job.nodesLoading {
+		t.Fatal("nodes should have finished loading")
+	}
+	if len(m.job.nodes) != 4 {
+		t.Fatalf("expected 4 nodes, got %d", len(m.job.nodes))
+	}
+	view := stripANSI(m.View())
+	show(t, "workflow job details with nodes", m.View())
+	for _, want := range []string{
+		"nodes (4)", "backup fleet", "successful", "rotate certs", "running",
+		"notify on failure", "skipped", "smoke test", "pending",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("workflow job details is missing %q\n%s", want, view)
+		}
+	}
+}
+
+// TestWorkflowJobDetailsRefreshReloadsNodes checks that 'r' on a workflow
+// job's details re-fetches its nodes, not just the job record — a node's
+// status is the only thing worth refreshing on a run with no stdout.
+func TestWorkflowJobDetailsRefreshReloadsNodes(t *testing.T) {
+	m, _ := openTab(t, "2")
+	for i, r := range m.visible(tabJobs) {
+		if r.id == 11 {
+			m.cursor[tabJobs] = i
+		}
+	}
+	m = step(t, m, key("enter"))
+	if m.mode != modeJob {
+		t.Fatalf("expected launch details, got mode %v (err %v)", m.mode, m.err)
+	}
+	m = step(t, m, key("r"))
+	if m.err != nil {
+		t.Fatalf("refresh failed: %v", m.err)
+	}
+	if m.job.nodesLoading || len(m.job.nodes) != 4 {
+		t.Errorf("refresh did not reload nodes: loading=%v count=%d", m.job.nodesLoading, len(m.job.nodes))
+	}
+}
+
 func TestPinningAWorkflowTemplate(t *testing.T) {
 	m, _ := openTab(t, "6")
 	m = rowAt(t, m, "Nightly pipeline")

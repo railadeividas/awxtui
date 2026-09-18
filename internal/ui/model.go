@@ -696,6 +696,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.job.loading = false
 		return m, nil
 
+	case workflowNodesMsg:
+		if msg.gen != m.gen || msg.jobID != m.job.job.ID {
+			return m, nil
+		}
+		m.job.nodes = msg.nodes
+		m.job.nodesTotal = msg.total
+		m.job.nodesLoading = false
+		return m, nil
+
 	case outputMsg:
 		if msg.gen != m.gen {
 			return m, nil

@@ -485,6 +485,63 @@ func TestLiveWorkflowTemplates(t *testing.T) {
 	}
 }
 
+// TestLiveWorkflowJobNodes opens the launch details of a real workflow job
+// — found through /api/v2/unified_jobs/?type=workflow_job rather than a
+// hardcoded id, since which ones exist drifts over time — and checks its
+// nodes render. The client is read-only, so this only ever issues GETs.
+//
+//	AWXTUI_LIVE=1 AWXTUI_SHOW=1 go test -v ./internal/ui -run TestLiveWorkflowJobNodes
+func TestLiveWorkflowJobNodes(t *testing.T) {
+	if os.Getenv("AWXTUI_LIVE") == "" {
+		t.Skip("set AWXTUI_LIVE=1 to run against a real AWX instance")
+	}
+	url, token := os.Getenv("AWX_URL"), os.Getenv("AWX_TOKEN")
+	if url == "" || token == "" {
+		t.Skip("AWX_URL and AWX_TOKEN must be set")
+	}
+
+	client := awx.New(url, token, os.Getenv("AWX_INSECURE") != "").ReadOnly()
+	m := New(client)
+	m = step(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = step(t, m, m.connect())
+	if m.err != nil {
+		t.Fatalf("connect failed: %v", m.err)
+	}
+
+	ctx, cancel := cmdCtx()
+	defer cancel()
+	page, err := client.UnifiedJobs(ctx, "", "", awx.JobFilter{Type: "workflow_job"})
+	if err != nil {
+		t.Fatalf("listing workflow jobs failed: %v", err)
+	}
+	if len(page.Results) == 0 {
+		t.Skip("no workflow jobs on this instance")
+	}
+	j := page.Results[0]
+	if !j.IsWorkflow() {
+		t.Fatalf("?type=workflow_job returned #%d with type %q", j.ID, j.Type)
+	}
+
+	cmd := m.openJobDetail(j)
+	for _, out := range drain(cmd) {
+		m = step(t, m, out)
+	}
+	if m.mode != modeJob {
+		t.Fatalf("details did not open for #%d: mode %v err %v", j.ID, m.mode, m.err)
+	}
+	if m.job.nodesLoading {
+		t.Fatalf("#%d: nodes never finished loading", j.ID)
+	}
+	if len(m.job.nodes) == 0 && m.job.nodesTotal > 0 {
+		t.Errorf("#%d: reported %d nodes but loaded none", j.ID, m.job.nodesTotal)
+	}
+	t.Logf("workflow job #%d (%s): %d nodes loaded of %d reported", j.ID, j.Name, len(m.job.nodes), m.job.nodesTotal)
+	for _, n := range m.job.nodes {
+		t.Logf("  node #%d %q: %s", n.ID, n.Name(), n.Status())
+	}
+	show(t, "live workflow job details", m.View())
+}
+
 // TestLiveSchedules opens the details of every real schedule. The client is
 // read-only, so this only ever issues GETs — it never calls
 // SetScheduleEnabled.

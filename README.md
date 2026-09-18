@@ -222,12 +222,17 @@ flag a workflow never sets just stays at its zero value rather than needing a
 type of its own.
 
 Launching answers with a workflow job, listed on the Jobs tab beside every
-other kind of run. A workflow job has no stdout of its own — its output is
-per-node, under `/workflow_nodes/`, which awxtui does not render yet — so
-`enter` and `d` both open its launch details (status, launch type, inventory,
-limit, tags, extra vars) instead of trying to open output that does not
-exist. `c` still cancels it, through its own `/api/v2/workflow_jobs/{id}/
-cancel/` rather than `/api/v2/jobs/`.
+other kind of run. A workflow job has no stdout of its own, so `enter` and
+`d` both open its launch details (status, launch type, inventory, limit,
+tags, extra vars) instead of trying to open output that does not exist —
+and, reading `/api/v2/workflow_jobs/{id}/workflow_nodes/`, every node's name
+and status underneath: successful, running, failed, `pending` for one the
+workflow has not reached yet, `skipped` for one on the untaken branch of a
+success/failure edge. The nodes themselves are listed flat, in the order AWX
+created them, not as the graph they form — no edges, no approvals, no
+retrying a single node. `r` reloads both the job and its nodes; `c` still
+cancels the workflow job itself, through its own
+`/api/v2/workflow_jobs/{id}/cancel/` rather than `/api/v2/jobs/`.
 
 ## Pinning and narrowing a view
 
@@ -460,9 +465,8 @@ the first page and merging it, so the pages you scrolled through stay put.
 ## Not done yet
 
 - Ad-hoc commands.
-- A workflow's own graph: the Workflows tab lists and launches, and a
-  workflow job shows its launch details, but the nodes themselves — their
-  order, approvals, and each node's own status — are not rendered. Look at
-  `/workflow_nodes/` in the AWX UI for that.
+- A workflow's own graph: a workflow job's details list every node's name
+  and status, but not the edges between them, approval nodes, or retrying
+  one node on its own. Look at the AWX UI for the graph itself.
 - Creating, editing or deleting a workflow job template, or a schedule: both
   tabs read (and a schedule toggles), but building either is not done.

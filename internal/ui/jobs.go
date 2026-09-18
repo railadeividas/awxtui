@@ -12,11 +12,16 @@ import (
 // jobDetail is the state of the job launch-details view. The jobs list's own
 // record — from /api/v2/jobs/ or /api/v2/unified_jobs/ — omits extra_vars,
 // tags and similar fields, so opening it always re-reads the record through
-// UnifiedJob before showing it.
+// UnifiedJob before showing it. A workflow job additionally carries its
+// nodes: it has no stdout of its own, so this is the closest thing awxtui has
+// to output for one.
 type jobDetail struct {
-	job     awx.Job
-	loading bool
-	offset  int
+	job          awx.Job
+	loading      bool
+	offset       int
+	nodes        []awx.WorkflowNode
+	nodesTotal   int
+	nodesLoading bool
 }
 
 // jobDetailMsg carries the full job record fetched for the details view.
@@ -25,11 +30,25 @@ type jobDetailMsg struct {
 	job awx.Job
 }
 
-// openJobDetail shows what a job was launched with.
+// workflowNodesMsg carries a workflow job's nodes for the details view.
+// jobID guards it the way jobDetailMsg is guarded by the job it names: the
+// details view can move on to a different job before a slow node list lands.
+type workflowNodesMsg struct {
+	gen   int
+	jobID int
+	nodes []awx.WorkflowNode
+	total int
+}
+
+// openJobDetail shows what a job was launched with, and its nodes if it is a
+// workflow job.
 func (m *Model) openJobDetail(j awx.Job) tea.Cmd {
 	m.err, m.notice = nil, ""
 	m.mode = modeJob
-	m.job = jobDetail{job: j, loading: true}
+	m.job = jobDetail{job: j, loading: true, nodesLoading: j.IsWorkflow()}
+	if j.IsWorkflow() {
+		return tea.Batch(m.fetchJobDetail(j), m.fetchWorkflowNodes(j.ID))
+	}
 	return m.fetchJobDetail(j)
 }
 
@@ -43,6 +62,32 @@ func (m *Model) fetchJobDetail(j awx.Job) tea.Cmd {
 			return errMsg{err: err, gen: gen, tab: tabCount}
 		}
 		return jobDetailMsg{gen: gen, job: full}
+	})
+}
+
+// fetchWorkflowNodes reads every node of a workflow job, up to maxPages. A
+// page that fails to load partway through is dropped rather than failing the
+// whole fetch: the nodes already in hand are still worth showing, and the
+// job's own status (fetched alongside, in fetchJobDetail) is not gated on it.
+func (m *Model) fetchWorkflowNodes(workflowJobID int) tea.Cmd {
+	c, gen := m.client, m.gen
+	return m.request(func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		first, err := c.WorkflowNodes(ctx, "", workflowJobID)
+		if err != nil {
+			return errMsg{err: err, gen: gen, tab: tabCount}
+		}
+		nodes, total, next := first.Results, first.Count, first.Next
+		for pages := 1; next != "" && pages < maxPages; pages++ {
+			p, err := c.WorkflowNodes(ctx, next, workflowJobID)
+			if err != nil {
+				break
+			}
+			nodes = append(nodes, p.Results...)
+			next = p.Next
+		}
+		return workflowNodesMsg{gen: gen, jobID: workflowJobID, nodes: nodes, total: total}
 	})
 }
 
@@ -74,12 +119,21 @@ func (m Model) handleJobKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		m.job.loading = true
+		if m.job.job.IsWorkflow() {
+			m.job.nodesLoading = true
+			return m, tea.Batch(m.fetchJobDetail(m.job.job), m.fetchWorkflowNodes(m.job.job.ID))
+		}
 		return m, m.fetchJobDetail(m.job.job)
 	case "p":
 		j := m.job.job
 		return m, m.togglePin(tabJobs, j.ID, j.Name, j.Type)
 	case "enter":
 		j := m.job.job
+		if j.IsWorkflow() {
+			// Already showing the closest thing to output a workflow job
+			// has: its nodes. There is no stdout to switch to.
+			return m, nil
+		}
 		m.err, m.notice = nil, ""
 		return m, m.openOutput(j)
 	case "?":
@@ -164,7 +218,7 @@ func (m Model) jobBody(width int) []string {
 		// implicit workflow a sliced job template creates leaves this empty
 		// and carries job_template instead, which awxtui does not show —
 		// that job template is the one already named by the sliced run.
-		field("workflow template", rowStyle.Render(j.SummaryFields.WorkflowJobTemplate.Name))
+		field("workflow", rowStyle.Render(j.SummaryFields.WorkflowJobTemplate.Name))
 		field("limit", rowStyle.Render(j.Limit))
 		field("job tags", rowStyle.Render(j.JobTags))
 		field("skip tags", rowStyle.Render(j.SkipTags))
@@ -187,6 +241,43 @@ func (m Model) jobBody(width int) []string {
 		}
 	}
 
+	if j.IsWorkflow() {
+		lines = append(lines, "", nodesHeading(m.job))
+		lines = append(lines, nodeLines(m.job, width)...)
+	}
+
+	return lines
+}
+
+// nodesHeading titles the node list with a count, so a workflow with none
+// loaded yet reads as "loading" rather than as one with no nodes at all.
+func nodesHeading(d jobDetail) string {
+	if d.nodesLoading {
+		return titleStyle.Render("nodes")
+	}
+	return titleStyle.Render(fmt.Sprintf("nodes (%d)", len(d.nodes)))
+}
+
+// nodeLines renders a workflow job's nodes: the closest thing awxtui shows
+// to its output, since a workflow job has none of its own — that lives
+// per-node, under /workflow_nodes/, which is not rendered as a graph here.
+func nodeLines(d jobDetail, width int) []string {
+	switch {
+	case d.nodesLoading:
+		return []string{dimStyle.Render("  loading…")}
+	case len(d.nodes) == 0:
+		return []string{dimStyle.Render("  none")}
+	}
+	var lines []string
+	for _, n := range d.nodes {
+		line := "  " + statusBadge(n.Status()) + "  " + rowStyle.Render(n.Name())
+		for _, l := range strings.Split(wrapANSI(line, width-6), "\n") {
+			lines = append(lines, l)
+		}
+	}
+	if more := d.nodesTotal - len(d.nodes); more > 0 {
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("  …and %d more", more)))
+	}
 	return lines
 }
 
