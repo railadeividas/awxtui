@@ -356,7 +356,7 @@ func (m Model) handleShowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.panel.startedByInput.Value() == "" {
 			switch msg.String() {
-			case "right", "left", " ":
+			case "right", "left":
 				m.panel.cycle(1)
 				return m, nil
 			case "backspace":
@@ -398,10 +398,11 @@ func (m Model) handleShowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case " ":
+		// Only a multi row toggles: on a cycle row, space advancing one step
+		// looked identical to "toggle" for a two-option row (Pinned) but not
+		// for Kind's four, where it just looked like right with an extra key.
 		if cur.kind == kindMulti {
 			m.panel.draft.status = toggleStatus(m.panel.draft.status, cur.options[m.panel.optCursor].value)
-		} else {
-			m.panel.cycle(1)
 		}
 		return m, nil
 	case "backspace", "c":
