@@ -614,8 +614,8 @@ func (m Model) statusView() string {
 	case modeFilter:
 		keys = plainKeys([][2]string{{"type", "to filter"}, {"enter", "keep"}, {"esc", "clear"}})
 	case modeShow:
-		keys = plainKeys([][2]string{{"↑↓", "choose"}, {"←→", "set"}, {"c", "clear"},
-			{"enter", "apply"}, {"esc", "cancel"}})
+		keys = plainKeys([][2]string{{"↑↓", "choose"}, {"←→", "move/set"}, {"space", "toggle"},
+			{"c", "clear"}, {"enter", "apply"}, {"esc", "cancel"}})
 	case modePick:
 		keys = plainKeys([][2]string{{"↑↓", "move"}, {"space", "toggle"}, {"a", "all"},
 			{"c", "none"}, {"enter", "done"}})

@@ -613,10 +613,16 @@ type JobFilter struct {
 	// CreatedBy is a user id. It is what makes a personal history usable at
 	// all: 310 runs out of 170290 on the instance this was built against.
 	CreatedBy int
-	// Status is an AWX job status: running, failed, successful…
-	Status string
-	// Type is an AWX record type: job, project_update, inventory_update.
-	Type string
+	// CreatedByUsername is a fragment of a username, for a colleague or a
+	// service account rather than the connected user. AWX matches it
+	// case-insensitively, since "deploy" should find "deploy-bot".
+	CreatedByUsername string
+	// Status is a set of AWX job statuses (running, failed, successful…),
+	// any of which match; empty is any.
+	Status []string
+	// Type is a set of AWX record types (job, project_update,
+	// inventory_update), any of which match; empty is any.
+	Type []string
 }
 
 func (f JobFilter) query() string {
@@ -624,11 +630,14 @@ func (f JobFilter) query() string {
 	if f.CreatedBy > 0 {
 		q += "&created_by=" + strconv.Itoa(f.CreatedBy)
 	}
-	if f.Status != "" {
-		q += "&status=" + url.QueryEscape(f.Status)
+	if f.CreatedByUsername != "" {
+		q += "&created_by__username__icontains=" + url.QueryEscape(f.CreatedByUsername)
 	}
-	if f.Type != "" {
-		q += "&type=" + url.QueryEscape(f.Type)
+	if len(f.Status) > 0 {
+		q += "&status__in=" + url.QueryEscape(strings.Join(f.Status, ","))
+	}
+	if len(f.Type) > 0 {
+		q += "&type__in=" + url.QueryEscape(strings.Join(f.Type, ","))
 	}
 	return q
 }

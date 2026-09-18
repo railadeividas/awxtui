@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -41,9 +42,15 @@ func setShow(t *testing.T, m Model, field, value string) Model {
 		t.Fatalf("f should open the show panel, got mode %v", m.mode)
 	}
 	rows := choicesFor(m.panel.tab)
+	// startedBy shares its row with "mine": both are the owner row, one a
+	// toggle while it holds no text, the other free text once it does.
+	lookup := field
+	if field == "startedBy" {
+		lookup = "mine"
+	}
 	at := -1
 	for i, c := range rows {
-		if c.field == field {
+		if c.field == lookup {
 			at = i
 		}
 	}
@@ -53,11 +60,36 @@ func setShow(t *testing.T, m Model, field, value string) Model {
 	for m.panel.cursor < at {
 		m = step(t, m, key("down"))
 	}
-	for i := 0; i < len(rows[at].options)*2; i++ {
-		if m.panel.draft.get(field) == value {
-			break
+	switch {
+	case field == "startedBy":
+		for m.panel.startedByInput.Value() != "" {
+			m = step(t, m, key("backspace"))
 		}
-		m = step(t, m, key("right"))
+		if value != "" {
+			m = typeText(t, m, value)
+		}
+	case rows[at].kind == kindMulti:
+		want := map[string]bool{}
+		for _, v := range strings.Split(value, ",") {
+			if v != "" {
+				want[v] = true
+			}
+		}
+		for oi, o := range rows[at].options {
+			for m.panel.optCursor != oi {
+				m = step(t, m, key("right"))
+			}
+			if slices.Contains(*m.panel.draft.multi(field), o.value) != want[o.value] {
+				m = step(t, m, key(" "))
+			}
+		}
+	default:
+		for i := 0; i < len(rows[at].options)*2; i++ {
+			if m.panel.draft.get(field) == value {
+				break
+			}
+			m = step(t, m, key("right"))
+		}
 	}
 	if got := m.panel.draft.get(field); got != value {
 		t.Fatalf("could not set %s to %q, draft holds %q", field, value, got)
@@ -159,7 +191,7 @@ func TestShowFilterNarrowsJobsServerSide(t *testing.T) {
 	if got := rowIDs(m, tabJobs); len(got) != 0 {
 		t.Errorf("none of admin's runs failed, got %v", got)
 	}
-	if q := srv.unified(); !strings.Contains(q[len(q)-1], "status=failed") {
+	if q := srv.unified(); !strings.Contains(q[len(q)-1], "status__in=failed") {
 		t.Errorf("the status filter did not reach AWX: %q", q[len(q)-1])
 	}
 
@@ -178,11 +210,110 @@ func TestShowFilterNarrowsJobsByKind(t *testing.T) {
 	if got := rowIDs(m, tabJobs); len(got) != 1 || got[0] != 12 {
 		t.Fatalf("project updates = %v, want just #12 (err %v)", got, m.err)
 	}
-	if q := srv.unified(); !strings.Contains(q[len(q)-1], "type=project_update") {
+	if q := srv.unified(); !strings.Contains(q[len(q)-1], "type__in=project_update") {
 		t.Errorf("the kind filter did not reach AWX: %q", q[len(q)-1])
 	}
 	if label := m.countLabel(tabJobs); !strings.Contains(label, "project updates") {
 		t.Errorf("count label = %q, should name the kind", label)
+	}
+}
+
+// A run worth a look is usually failed or still running — two statuses at
+// once, not one, which is why status is a set rather than a single choice.
+func TestShowFilterCanSelectMultipleStatuses(t *testing.T) {
+	srv := mockAWX(t)
+	m := onTab(t, srv, tabJobs)
+
+	m = setShow(t, m, "status", "failed,running")
+	got := rowIDs(m, tabJobs)
+	want := map[int]bool{43: true, 40: true, 11: true}
+	if len(got) != len(want) {
+		t.Fatalf("failed+running = %v, want the 3 runs in either status", got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("row #%d is neither failed nor running", id)
+		}
+	}
+	if q := srv.unified(); !strings.Contains(q[len(q)-1], "status__in=failed%2Crunning") &&
+		!strings.Contains(q[len(q)-1], "status__in=failed,running") {
+		t.Errorf("the multi-status filter did not reach AWX as one comma list: %q", q[len(q)-1])
+	}
+
+	// Toggling failed back off narrows to running alone.
+	m = setShow(t, m, "status", "running")
+	got = rowIDs(m, tabJobs)
+	want = map[int]bool{43: true, 11: true}
+	if len(got) != len(want) {
+		t.Fatalf("running alone = %v, want just #43 and #11", got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("row #%d is not running", id)
+		}
+	}
+}
+
+// Kind is a set too, for the same reason status is: wanting jobs and project
+// updates together, but not inventory syncs, is one narrowing, not two.
+func TestShowFilterCanSelectMultipleKinds(t *testing.T) {
+	srv := mockAWX(t)
+	m := onTab(t, srv, tabJobs)
+
+	m = setShow(t, m, "kind", "job,project_update")
+	got := rowIDs(m, tabJobs)
+	want := map[int]bool{43: true, 42: true, 40: true, 12: true}
+	if len(got) != len(want) {
+		t.Fatalf("job+project_update = %v, want the 4 runs of either kind", got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("row #%d is neither a job nor a project update", id)
+		}
+	}
+	if q := srv.unified(); !strings.Contains(q[len(q)-1], "type__in=job%2Cproject_update") &&
+		!strings.Contains(q[len(q)-1], "type__in=job,project_update") {
+		t.Errorf("the multi-kind filter did not reach AWX as one comma list: %q", q[len(q)-1])
+	}
+
+	// Kind's own "any" is not a member alongside job/project_update/
+	// inventory_update - selecting it resets the whole row to unfiltered,
+	// the same blank-means-any value every other row uses.
+	m = step(t, m, key("f"))
+	m = step(t, m, key("down"))
+	m = step(t, m, key("down")) // owner -> status -> kind, landing on "any"
+	m = step(t, m, key(" "))
+	if got := m.panel.draft.kind; len(got) != 0 {
+		t.Fatalf("selecting any should clear kind, draft holds %v", got)
+	}
+	m = step(t, m, key("enter"))
+	if len(rowIDs(m, tabJobs)) != 6 {
+		t.Errorf("kind cleared to any should show every run, got %v", rowIDs(m, tabJobs))
+	}
+}
+
+// "mine" only ever means the connected user; finding a deploy bot's or a
+// colleague's runs needs their name typed in instead.
+func TestShowFilterNarrowsByStartedByText(t *testing.T) {
+	srv := mockAWX(t)
+	m := onTab(t, srv, tabJobs)
+
+	m = setShow(t, m, "startedBy", "colleague")
+	if got := rowIDs(m, tabJobs); len(got) != 1 || got[0] != 40 {
+		t.Fatalf("started-by 'colleague' = %v, want just #40", got)
+	}
+	if q := srv.unified(); !strings.Contains(q[len(q)-1], "created_by__username__icontains=colleague") {
+		t.Errorf("the started-by filter did not reach AWX: %q", q[len(q)-1])
+	}
+	if label := m.countLabel(tabJobs); !strings.Contains(label, "by colleague") {
+		t.Errorf("count label = %q, should name who it is narrowed to", label)
+	}
+
+	// A partial, differently-cased fragment still matches, the way AWX's
+	// icontains lookup does.
+	m = setShow(t, m, "startedBy", "COLL")
+	if got := rowIDs(m, tabJobs); len(got) != 1 || got[0] != 40 {
+		t.Errorf("case-insensitive fragment 'COLL' = %v, want just #40", got)
 	}
 }
 
@@ -202,13 +333,36 @@ func TestEscapingTheShowPanelChangesNothing(t *testing.T) {
 		t.Errorf("esc changed the rows: %v, was %v", got, before)
 	}
 
-	// c clears every choice at once.
+	// c clears every choice at once. It is pressed off the owner row, where
+	// a letter is just as likely to be the start of a typed username.
 	m = setShow(t, m, "mine", "yes")
 	m = step(t, m, key("f"))
+	m = step(t, m, key("down"))
 	m = step(t, m, key("c"))
 	m = step(t, m, key("enter"))
 	if m.show[tabJobs].active() {
 		t.Errorf("c should clear the whole filter, left %+v", m.show[tabJobs])
+	}
+
+	// On the owner row, backspace erases its text like any other field; only
+	// once that text is empty does backspace fall back to clearing the whole
+	// filter, rather than doing nothing.
+	m = setShow(t, m, "startedBy", "colleague")
+	m = setShow(t, m, "status", "failed")
+	m = step(t, m, key("f"))
+	for range []rune("colleague") {
+		m = step(t, m, key("backspace"))
+	}
+	if got := m.panel.draft.startedBy; got != "" {
+		t.Fatalf("backspace did not erase the owner row's text, left %q", got)
+	}
+	if len(m.panel.draft.status) == 0 {
+		t.Fatalf("erasing the owner row's text should not have touched status")
+	}
+	m = step(t, m, key("backspace"))
+	m = step(t, m, key("enter"))
+	if m.show[tabJobs].active() {
+		t.Errorf("backspace on the now-empty owner row should clear the whole filter, left %+v", m.show[tabJobs])
 	}
 }
 
@@ -444,7 +598,7 @@ func TestNarrowingSurvivesARestart(t *testing.T) {
 	}
 
 	fresh := New(awx.New(srv.URL, "test-token", false), WithStore(reopened))
-	if got := fresh.show[tabJobs]; !got.mine || got.status != "successful" {
+	if got := fresh.show[tabJobs]; !got.mine || len(got.status) != 1 || got.status[0] != "successful" {
 		t.Fatalf("a new model did not restore the filter, got %+v", got)
 	}
 	before := len(srv.unified())
@@ -452,7 +606,7 @@ func TestNarrowingSurvivesARestart(t *testing.T) {
 	fresh = step(t, fresh, fresh.connect())
 	fresh = step(t, fresh, key("2"))
 	for _, q := range srv.unified()[before:] {
-		if !strings.Contains(q, "created_by=1") || !strings.Contains(q, "status=successful") {
+		if !strings.Contains(q, "created_by=1") || !strings.Contains(q, "status__in=successful") {
 			t.Errorf("a request went out unnarrowed after restart: %q", q)
 		}
 	}
@@ -464,7 +618,9 @@ func TestNarrowingSurvivesARestart(t *testing.T) {
 	}
 
 	// Clearing it is saved too, rather than coming back on the next start.
+	// c is pressed off the owner row, where a letter is typed text instead.
 	fresh = step(t, fresh, key("f"))
+	fresh = step(t, fresh, key("down"))
 	fresh = step(t, fresh, key("c"))
 	fresh = step(t, fresh, key("enter"))
 	again, err := state.Load(path)
