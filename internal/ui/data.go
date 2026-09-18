@@ -49,6 +49,10 @@ type (
 		pageMeta
 		items []awx.Schedule
 	}
+	workflowsMsg struct {
+		pageMeta
+		items []awx.WorkflowJobTemplate
+	}
 	// scheduleToggledMsg reports the outcome of a schedule enabled/disabled
 	// PATCH, carrying the value that was requested rather than re-fetching it.
 	scheduleToggledMsg struct {
@@ -81,17 +85,21 @@ type (
 		job awx.Job
 		gen int
 	}
-	// launchFormMsg carries everything needed to build the launch form.
+	// launchFormMsg carries everything needed to build the launch form, for
+	// either a job template or a workflow job template — isWorkflow says
+	// which of template/workflowTemplate is the one being launched.
 	launchFormMsg struct {
-		gen            int
-		template       awx.JobTemplate
-		config         awx.LaunchConfig
-		survey         awx.SurveySpec
-		inventories    []awx.Inventory
-		credentials    []awx.Credential
-		environments   []awx.ExecutionEnvironment
-		instanceGroups []awx.InstanceGroup
-		labels         []awx.Label
+		gen              int
+		isWorkflow       bool
+		template         awx.JobTemplate
+		workflowTemplate awx.WorkflowJobTemplate
+		config           awx.LaunchConfig
+		survey           awx.SurveySpec
+		inventories      []awx.Inventory
+		credentials      []awx.Credential
+		environments     []awx.ExecutionEnvironment
+		instanceGroups   []awx.InstanceGroup
+		labels           []awx.Label
 	}
 	canceledMsg struct {
 		id  int
@@ -223,6 +231,17 @@ func (m *Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			meta.next, meta.count = p.Next, p.Count
 			return schedulesMsg{pageMeta: meta, items: p.Results}
 		})
+	case tabWorkflows:
+		return m.request(func() tea.Msg {
+			ctx, cancel := cmdCtx()
+			defer cancel()
+			p, err := c.WorkflowJobTemplates(ctx, pageURL, search)
+			if err != nil {
+				return errMsg{err: err, gen: gen, tab: tabWorkflows}
+			}
+			meta.next, meta.count = p.Next, p.Count
+			return workflowsMsg{pageMeta: meta, items: p.Results}
+		})
 	}
 	return nil
 }
@@ -290,6 +309,12 @@ func (m Model) pinnedCmd(t tab, meta pageMeta) tea.Cmd {
 				return errMsg{err: err, gen: gen, tab: tabSchedules}
 			}
 			return schedulesMsg{pageMeta: meta, items: inPinnedOrder(ids, found, scheduleID)}
+		case tabWorkflows:
+			found, err := c.WorkflowJobTemplatesByID(ctx, ids)
+			if err != nil {
+				return errMsg{err: err, gen: gen, tab: tabWorkflows}
+			}
+			return workflowsMsg{pageMeta: meta, items: inPinnedOrder(ids, found, workflowID)}
 		default:
 			found, err := c.ProjectsByID(ctx, ids)
 			if err != nil {
@@ -424,6 +449,50 @@ func (m *Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 		}
 		if cfg.AskInstanceGroups {
 			msg.instanceGroups, _ = c.AllInstanceGroups(ctx, maxPages)
+		}
+		if cfg.AskLabels {
+			msg.labels, _ = c.AllLabels(ctx, maxPages)
+		}
+		return msg
+	})
+}
+
+func (m *Model) launchWorkflow(templateID int, payload map[string]any) tea.Cmd {
+	c, gen := m.client, m.gen
+	return m.request(func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		job, err := c.LaunchWorkflow(ctx, templateID, payload)
+		if err != nil {
+			return errMsg{err: err, gen: gen, tab: tabCount}
+		}
+		return launchedMsg{job: job, gen: gen}
+	})
+}
+
+// fetchWorkflowLaunchForm reads what a workflow needs before it can start.
+// It never asks for a credential, execution environment, job type or
+// verbosity — those belong to the workflow's nodes, not the workflow itself.
+func (m *Model) fetchWorkflowLaunchForm(t awx.WorkflowJobTemplate) tea.Cmd {
+	c, gen := m.client, m.gen
+	return m.request(func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		cfg, err := c.WorkflowLaunchConfig(ctx, t.ID)
+		if err != nil {
+			return errMsg{err: err, gen: gen, tab: tabCount}
+		}
+		msg := launchFormMsg{gen: gen, isWorkflow: true, workflowTemplate: t, config: cfg}
+		if cfg.SurveyEnabled {
+			spec, err := c.WorkflowSurveySpec(ctx, t.ID)
+			if err != nil {
+				return errMsg{err: err, gen: gen, tab: tabCount}
+			}
+			msg.survey = spec
+		}
+		if cfg.AskInventory {
+			// Best effort: the form falls back to typing an id.
+			msg.inventories, _ = c.AllInventories(ctx, maxPages)
 		}
 		if cfg.AskLabels {
 			msg.labels, _ = c.AllLabels(ctx, maxPages)
@@ -671,6 +740,34 @@ func (m Model) scheduleRows(items []awx.Schedule) []row {
 			},
 			search: strings.ToLower(s.Name + " " + kind + " " +
 				s.SummaryFields.UnifiedJobTemplate.Name + " " + pinned),
+		})
+	}
+	return rows
+}
+
+func (m Model) workflowRows(items []awx.WorkflowJobTemplate) []row {
+	rows := make([]row, 0, len(items))
+	for _, t := range items {
+		pinned := ""
+		if m.pinned(tabWorkflows, t.ID) {
+			pinned = "pinned"
+		}
+		last := statusBadge(t.LastRunStatus())
+		when := dimStyle.Render("—")
+		if t.LastJobRun != nil {
+			when = dimStyle.Render(ago(*t.LastJobRun))
+		}
+		rows = append(rows, row{
+			id: t.ID,
+			cells: []string{
+				m.pinMark(tabWorkflows, t.ID, t.Name),
+				dimStyle.Render(t.SummaryFields.Organization.Name),
+				dimStyle.Render(t.SummaryFields.Inventory.Name),
+				last,
+				when,
+			},
+			search: strings.ToLower(t.Name + " " + t.SummaryFields.Organization.Name + " " +
+				t.SummaryFields.Inventory.Name + " " + pinned),
 		})
 	}
 	return rows

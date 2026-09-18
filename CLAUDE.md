@@ -123,8 +123,9 @@ tmux send-keys -t awx i; tmux capture-pane -p -t awx
 
 ## Still open
 
-Workflow job templates, schedules and ad-hoc commands. See the "Not done yet"
-section of README.md.
+Ad-hoc commands, a workflow's own node graph, and creating or editing a
+workflow job template or a schedule. See the "Not done yet" section of
+README.md.
 
 Every `ask_*_on_launch` flag AWX exposes now has a field. A new one must be
 added in three places at once — the flag on `awx.LaunchConfig`, the field in

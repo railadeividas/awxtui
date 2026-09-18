@@ -52,6 +52,7 @@ var tabColumns = map[tab][]col{
 	tabInventories: {{title: "name", width: 0}, {title: "organization", width: 22}, {title: "hosts", width: 7}, {title: "groups", width: 7}, {title: "health", width: 14}, {title: "sources", width: 9}},
 	tabProjects:    {{title: "name", width: 0}, {title: "scm", width: 10}, {title: "branch", width: 18}, {title: "status", width: 14}, {title: "updated", width: 11}},
 	tabSchedules:   {{title: "name", width: 0}, {title: "type", width: 10}, {title: "runs", width: 22}, {title: "next run", width: 14}, {title: "state", width: 9}},
+	tabWorkflows:   {{title: "name", width: 0}, {title: "organization", width: 22}, {title: "inventory", width: 20}, {title: "last run", width: 14}, {title: "when", width: 11}},
 }
 
 var hostColumns = []col{{title: "host", width: 0}, {title: "state", width: 10}, {title: "description", width: 32}}
@@ -334,16 +335,20 @@ func (m Model) launchModal() string {
 	inner := min(m.width-8, 78)
 
 	var head strings.Builder
-	head.WriteString(titleStyle.Render("Launch") + "  " + rowStyle.Render(f.template.Name))
+	head.WriteString(titleStyle.Render("Launch") + "  " + rowStyle.Render(f.name()))
 	head.WriteString("\n")
-	meta := []string{fmt.Sprintf("#%d", f.template.ID)}
-	if p := f.template.SummaryFields.Project.Name; p != "" {
+	meta := []string{fmt.Sprintf("#%d", f.id())}
+	if f.isWorkflow {
+		if org := f.workflowTemplate.SummaryFields.Organization.Name; org != "" {
+			meta = append(meta, "org "+org)
+		}
+	} else if p := f.template.SummaryFields.Project.Name; p != "" {
 		meta = append(meta, "project "+p)
 	}
 	if inv := f.config.Defaults.Inventory.Name; inv != "" {
 		meta = append(meta, "inventory "+inv)
 	}
-	if f.template.Playbook != "" {
+	if !f.isWorkflow && f.template.Playbook != "" {
 		meta = append(meta, f.template.Playbook)
 	}
 	head.WriteString(metaStyle.Render(strings.Join(meta, "  ·  ")))
@@ -553,7 +558,7 @@ func (m Model) helpModal() string {
 	b.WriteString(titleStyle.Render("Keys"))
 	b.WriteString("\n\n")
 	groups := [][2]string{
-		{"1-4 / tab", "switch view"},
+		{"1-6 / tab", "switch view"},
 		{"↑↓ j k", "move  ·  ctrl+d ctrl+u half page  ·  g G top bottom"},
 		{"/", "search (esc clears)"},
 		{"enter", "launch · open job output · project or inventory details · in job details: its output"},

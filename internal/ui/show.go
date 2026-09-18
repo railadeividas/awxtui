@@ -251,6 +251,8 @@ func (m *Model) reload(t tab) tea.Cmd {
 		m.inventories = nil
 	case tabProjects:
 		m.projects = nil
+	case tabWorkflows:
+		m.workflows = nil
 	}
 	return m.load(t, true)
 }

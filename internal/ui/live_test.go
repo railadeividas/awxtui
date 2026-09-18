@@ -422,6 +422,69 @@ func TestLiveProjectDetails(t *testing.T) {
 	}
 }
 
+// TestLiveWorkflowTemplates builds the launch form for every real workflow
+// job template. The client is read-only, so this only ever issues GETs.
+//
+//	AWXTUI_LIVE=1 AWXTUI_SHOW=1 go test -v ./internal/ui -run TestLiveWorkflowTemplates
+func TestLiveWorkflowTemplates(t *testing.T) {
+	if os.Getenv("AWXTUI_LIVE") == "" {
+		t.Skip("set AWXTUI_LIVE=1 to run against a real AWX instance")
+	}
+	url, token := os.Getenv("AWX_URL"), os.Getenv("AWX_TOKEN")
+	if url == "" || token == "" {
+		t.Skip("AWX_URL and AWX_TOKEN must be set")
+	}
+
+	m := New(awx.New(url, token, os.Getenv("AWX_INSECURE") != "").ReadOnly())
+	m = step(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = step(t, m, m.connect())
+	if m.err != nil {
+		t.Fatalf("connect failed: %v", m.err)
+	}
+	m = step(t, m, key("6"))
+	if m.err != nil {
+		t.Fatalf("loading workflow job templates failed: %v", m.err)
+	}
+	if len(m.workflows) == 0 {
+		t.Skip("no workflow job templates on this instance")
+	}
+
+	for i, wf := range m.workflows {
+		m.cursor[tabWorkflows] = i
+		m = step(t, m, key("enter"))
+		if m.mode != modeLaunch {
+			t.Fatalf("form did not open for %q: mode %v err %v", wf.Name, m.mode, m.err)
+		}
+		if !m.form.isWorkflow {
+			t.Errorf("%s (#%d): form was not marked as a workflow launch", wf.Name, wf.ID)
+		}
+		t.Logf("%s (#%d): survey=%v fields=%v", wf.Name, wf.ID, m.form.config.SurveyEnabled, formKeys(&m))
+		show(t, "live workflow launch form: "+wf.Name, m.View())
+
+		// A workflow must never grow a node-only field: those belong to the
+		// job templates inside it, and its own launch config never sets
+		// the flags that create them.
+		cfg := m.form.config
+		if cfg.AskCredentials || cfg.AskExecutionEnvironment || cfg.AskJobType || cfg.AskVerbosity ||
+			cfg.AskForks || cfg.AskJobSliceCount || cfg.AskInstanceGroups {
+			t.Errorf("%s (#%d): workflow launch config set a node-only ask_* flag: %+v", wf.Name, wf.ID, cfg)
+		}
+		for _, k := range formKeys(&m) {
+			switch k {
+			case "credentials", "execution_environment", "job_type", "verbosity", "forks", "job_slice_count", "instance_groups":
+				t.Errorf("%s (#%d): form grew node-only field %q", wf.Name, wf.ID, k)
+			}
+		}
+
+		// Submitting must be refused by the read-only client.
+		m = step(t, m, key("ctrl+s"))
+		if m.mode != modeLaunch {
+			t.Fatalf("read-only client must not submit a workflow's form (%s)", wf.Name)
+		}
+		m = step(t, m, key("esc"))
+	}
+}
+
 // TestLiveSchedules opens the details of every real schedule. The client is
 // read-only, so this only ever issues GETs — it never calls
 // SetScheduleEnabled.

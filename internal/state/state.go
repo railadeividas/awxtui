@@ -25,6 +25,7 @@ const (
 	GroupInventorys = "inventories"
 	GroupProjects   = "projects"
 	GroupSchedules  = "schedules"
+	GroupWorkflows  = "workflows"
 )
 
 // maxPins bounds one group of one instance. A pin is deliberate, so the cap

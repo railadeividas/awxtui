@@ -24,6 +24,8 @@ func (j Job) KindLabel() string {
 		return "project update"
 	case ResourceInventoryUpdates:
 		return "inventory sync"
+	case ResourceWorkflowJobs:
+		return "workflow"
 	default:
 		return "job"
 	}

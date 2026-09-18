@@ -23,10 +23,11 @@ const (
 	tabInventories
 	tabProjects
 	tabSchedules
+	tabWorkflows
 	tabCount
 )
 
-var tabNames = [tabCount]string{"Templates", "Jobs", "Inventories", "Projects", "Schedules"}
+var tabNames = [tabCount]string{"Templates", "Jobs", "Inventories", "Projects", "Schedules", "Workflows"}
 
 type mode int
 
@@ -126,6 +127,7 @@ type Model struct {
 	inventories []awx.Inventory
 	projects    []awx.Project
 	schedules   []awx.Schedule
+	workflows   []awx.WorkflowJobTemplate
 
 	filterInput textinput.Model
 	spin        spinner.Model
@@ -343,6 +345,19 @@ func (m *Model) selectedTemplate() (awx.JobTemplate, bool) {
 		}
 	}
 	return awx.JobTemplate{}, false
+}
+
+func (m *Model) selectedWorkflow() (awx.WorkflowJobTemplate, bool) {
+	r, ok := m.selected()
+	if !ok {
+		return awx.WorkflowJobTemplate{}, false
+	}
+	for _, t := range m.workflows {
+		if t.ID == r.id {
+			return t, true
+		}
+	}
+	return awx.WorkflowJobTemplate{}, false
 }
 
 func (m *Model) load(t tab, force bool) tea.Cmd {
@@ -607,6 +622,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampAll()
 		return m, m.continueLoad(tabSchedules)
 
+	case workflowsMsg:
+		if msg.gen != m.gen || msg.seq != m.searchSeq[tabWorkflows] {
+			return m, nil // a newer search, or another instance, has replaced it
+		}
+		m.fetching[tabWorkflows], m.searching[tabWorkflows] = false, false
+		if msg.cont {
+			m.workflows = append(m.workflows, msg.items...)
+		} else {
+			m.workflows = msg.items
+			m.serverQuery[tabWorkflows] = msg.query
+		}
+		m.rows[tabWorkflows] = m.workflowRows(m.workflows)
+		m.next[tabWorkflows] = msg.next
+		m.count[tabWorkflows] = msg.count
+		m.loaded[tabWorkflows] = true
+		m.clampAll()
+		return m, m.continueLoad(tabWorkflows)
+
 	case scheduleToggledMsg:
 		m.toggling = false
 		if msg.gen != m.gen {
@@ -698,7 +731,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = fmt.Sprintf("launched job #%d", msg.job.ID)
 		m.loaded[tabJobs] = false
 		m.form = form{}
-		cmd := m.openOutput(msg.job)
+		// A workflow job has no stdout of its own to open: show what it was
+		// launched with instead, the same view 'd' opens for one already running.
+		var cmd tea.Cmd
+		if msg.job.IsWorkflow() {
+			cmd = m.openJobDetail(msg.job)
+		} else {
+			cmd = m.openOutput(msg.job)
+		}
 		return m, tea.Batch(cmd, m.fetch(tabJobs, "", m.serverQuery[tabJobs], false))
 
 	case canceledMsg:
@@ -852,10 +892,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.form.problem = "read-only mode: launching is disabled"
 			return m, nil
 		}
-		id := m.form.template.ID
+		id := m.form.launchID()
 		m.form.submitting = true
 		m.form.problem = ""
 		m.err = nil
+		if m.form.isWorkflow {
+			return m, m.launchWorkflow(id, payload)
+		}
 		return m, m.launch(id, payload)
 
 	case modeHelp, modeError:
@@ -942,7 +985,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "left", "h":
 		m.active = (m.active + tabCount - 1) % tabCount
 		return m, m.afterTabSwitch()
-	case "1", "2", "3", "4", "5":
+	case "1", "2", "3", "4", "5", "6":
 		m.active = tab(key[0] - '1')
 		return m, m.afterTabSwitch()
 	case "/":
@@ -993,8 +1036,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.active == tabJobs {
 			if j, ok := m.selectedJob(); ok {
 				// The unified list can hold kinds awxtui has no detail endpoint
-				// for; see the same check in activate().
-				if !j.Supported() {
+				// for; see the same check in activate(). A workflow job does
+				// have one — /api/v2/workflow_jobs/{id}/ — even though it has
+				// no stdout.
+				if !j.Supported() && !j.IsWorkflow() {
 					m.err = fmt.Errorf("#%d is a %s; awxtui cannot show its details yet",
 						j.ID, strings.ReplaceAll(j.Type, "_", " "))
 					return m, nil
@@ -1028,9 +1073,14 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		// The unified list can hold kinds awxtui has no output endpoint for.
-		// Saying so beats fetching /api/v2/jobs/<id>/stdout/ for a workflow
-		// job and reporting whatever 404 comes back.
+		// A workflow job has no stdout of its own; show what it was launched
+		// with instead of fetching /api/v2/workflow_jobs/<id>/stdout/, which
+		// does not exist.
+		if j.IsWorkflow() {
+			return m, m.openJobDetail(j)
+		}
+		// The unified list can also hold kinds awxtui has no output endpoint
+		// for at all (ad hoc commands, system jobs).
 		if !j.Supported() {
 			m.err = fmt.Errorf("#%d is a %s; awxtui cannot show its output yet",
 				j.ID, strings.ReplaceAll(j.Type, "_", " "))
@@ -1059,6 +1109,14 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.openSchedule(s)
+
+	case tabWorkflows:
+		t, ok := m.selectedWorkflow()
+		if !ok {
+			return m, nil
+		}
+		m.err, m.notice = nil, "reading launch options…"
+		return m, m.fetchWorkflowLaunchForm(t)
 	}
 	return m, nil
 }
