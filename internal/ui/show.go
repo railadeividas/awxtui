@@ -117,11 +117,14 @@ var (
 	statusChoice = choice{field: "status", title: "Status", kind: kindMulti, options: []option{
 		{"running", "running"}, {"failed", "failed"}, {"successful", "successful"},
 	}}
-	// kindChoice offers no "anything" option, the same reasoning as status:
-	// an empty selection already means any, and it is common to want jobs
-	// and project updates together while excluding inventory syncs.
+	// kindChoice leads with "any", a value of "" like any other row's blank
+	// option: selecting it does not add "" to the set, it clears whatever is
+	// selected, since an empty set already means any kind. "everything"
+	// (Pinned's wording for the same idea) does not fit here alongside
+	// "project updates" and "inventory syncs" without wrapping the row.
 	kindChoice = choice{field: "kind", title: "Kind", kind: kindMulti, options: []option{
-		{"jobs", "job"}, {"project updates", "project_update"}, {"inventory syncs", "inventory_update"},
+		{"any", ""}, {"jobs", "job"},
+		{"project updates", "project_update"}, {"inventory syncs", "inventory_update"},
 	}}
 	pinnedChoice = choice{field: "pinned", title: "Pinned", kind: kindCycle, options: []option{
 		{"everything", ""}, {"pinned only", "yes"},
@@ -424,8 +427,15 @@ func (m Model) handleShowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// for a row with more choices, where it just looked like right with
 		// an extra key.
 		if cur.kind == kindMulti {
+			v := cur.options[m.panel.optCursor].value
 			set := m.panel.draft.multi(cur.field)
-			*set = toggleMember(*set, cur.options[m.panel.optCursor].value)
+			if v == "" {
+				// "any" is not a member to add — an empty value already
+				// means any, so selecting it clears the set.
+				*set = nil
+			} else {
+				*set = toggleMember(*set, v)
+			}
 		}
 		return m, nil
 	case "backspace", "c":
@@ -485,7 +495,12 @@ func (m Model) showModal() string {
 		for oi, o := range c.options {
 			switch c.kind {
 			case kindMulti:
-				selected := slices.Contains(*m.panel.draft.multi(c.field), o.value)
+				current := *m.panel.draft.multi(c.field)
+				// "everything" is not a member; it reads as selected when
+				// nothing else is, the same blank-means-any value every
+				// other row uses.
+				selected := o.value == "" && len(current) == 0 ||
+					o.value != "" && slices.Contains(current, o.value)
 				focused := i == m.panel.cursor && oi == m.panel.optCursor
 				label := " " + o.label + " "
 				if selected {

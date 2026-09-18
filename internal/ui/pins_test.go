@@ -275,6 +275,21 @@ func TestShowFilterCanSelectMultipleKinds(t *testing.T) {
 		!strings.Contains(q[len(q)-1], "type__in=job,project_update") {
 		t.Errorf("the multi-kind filter did not reach AWX as one comma list: %q", q[len(q)-1])
 	}
+
+	// Kind's own "any" is not a member alongside job/project_update/
+	// inventory_update - selecting it resets the whole row to unfiltered,
+	// the same blank-means-any value every other row uses.
+	m = step(t, m, key("f"))
+	m = step(t, m, key("down"))
+	m = step(t, m, key("down")) // owner -> status -> kind, landing on "any"
+	m = step(t, m, key(" "))
+	if got := m.panel.draft.kind; len(got) != 0 {
+		t.Fatalf("selecting any should clear kind, draft holds %v", got)
+	}
+	m = step(t, m, key("enter"))
+	if len(rowIDs(m, tabJobs)) != 6 {
+		t.Errorf("kind cleared to any should show every run, got %v", rowIDs(m, tabJobs))
+	}
 }
 
 // "mine" only ever means the connected user; finding a deploy bot's or a

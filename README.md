@@ -253,15 +253,18 @@ narrowed by:
 
 | Tab | Choices |
 | --- | --- |
-| Jobs | started by anyone / me, or a typed username · status: any of running / failed / successful, several at once · kind: any of jobs / project updates / inventory syncs, several at once · everything / pinned only |
+| Jobs | started by anyone / me, or a typed username · status: any of running / failed / successful, several at once · kind: any / jobs / project updates / inventory syncs, several at once · everything / pinned only |
 | Templates, Inventories, Projects | everything / pinned only |
 
 `↑↓` picks a row. Status and Kind are sets, not one choice each — a run
 worth a look is usually failed or still running, both at once, and wanting
 jobs and project updates together while excluding inventory syncs is one
 narrowing, not two — so on those rows `←→` moves a highlight across the
-options and `space` toggles the highlighted one in or out. On every other
-row `←→` cycles through its options; `space` does nothing there, so it
+options and `space` toggles the highlighted one in or out. Kind leads with
+an "any" entry (Status has none — an empty set already means any, and there
+is no shorter way to say it that still fits the row) which is not a member
+to toggle in; selecting it just clears whatever else is selected. On every
+other row `←→` cycles through its options; `space` does nothing there, so it
 means one thing everywhere it does something. "Started by" is one row that
 does two jobs: empty, `←→` toggles anyone/me exactly like Pinned does, but
 the moment a character is typed it becomes a username fragment instead (a
