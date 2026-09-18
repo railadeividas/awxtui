@@ -603,8 +603,13 @@ func (m Model) statusView() string {
 		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"t", toggle}, {"esc", "back"}, {"?", "help"}})
 	case modeJob:
 		pin := m.jobPinLabel()
-		keys = append(plainKeys([][2]string{{"↑↓", "scroll"}, {"enter", "output"}}),
-			legend{key: "p", desc: pin, on: pin == "unpin"})
+		base := []legend{{key: "↑↓", desc: "scroll"}}
+		// A workflow job has no output to switch to: its nodes are already
+		// on screen, and enter does nothing here.
+		if !m.job.job.IsWorkflow() {
+			base = append(base, legend{key: "enter", desc: "output"})
+		}
+		keys = append(base, legend{key: "p", desc: pin, on: pin == "unpin"})
 		keys = append(keys, plainKeys([][2]string{{"r", "reload"}, {"esc", "back"}, {"?", "help"}})...)
 	case modeFilter:
 		keys = plainKeys([][2]string{{"type", "to filter"}, {"enter", "keep"}, {"esc", "clear"}})
