@@ -42,9 +42,15 @@ func setShow(t *testing.T, m Model, field, value string) Model {
 		t.Fatalf("f should open the show panel, got mode %v", m.mode)
 	}
 	rows := choicesFor(m.panel.tab)
+	// startedBy shares its row with "mine": both are the owner row, one a
+	// toggle while it holds no text, the other free text once it does.
+	lookup := field
+	if field == "startedBy" {
+		lookup = "mine"
+	}
 	at := -1
 	for i, c := range rows {
-		if c.field == field {
+		if c.field == lookup {
 			at = i
 		}
 	}
@@ -54,15 +60,15 @@ func setShow(t *testing.T, m Model, field, value string) Model {
 	for m.panel.cursor < at {
 		m = step(t, m, key("down"))
 	}
-	switch rows[at].kind {
-	case kindText:
+	switch {
+	case field == "startedBy":
 		for m.panel.startedByInput.Value() != "" {
 			m = step(t, m, key("backspace"))
 		}
 		if value != "" {
 			m = typeText(t, m, value)
 		}
-	case kindMulti:
+	case rows[at].kind == kindMulti:
 		want := map[string]bool{}
 		for _, v := range strings.Split(value, ",") {
 			if v != "" {
@@ -289,13 +295,36 @@ func TestEscapingTheShowPanelChangesNothing(t *testing.T) {
 		t.Errorf("esc changed the rows: %v, was %v", got, before)
 	}
 
-	// c clears every choice at once.
+	// c clears every choice at once. It is pressed off the owner row, where
+	// a letter is just as likely to be the start of a typed username.
 	m = setShow(t, m, "mine", "yes")
 	m = step(t, m, key("f"))
+	m = step(t, m, key("down"))
 	m = step(t, m, key("c"))
 	m = step(t, m, key("enter"))
 	if m.show[tabJobs].active() {
 		t.Errorf("c should clear the whole filter, left %+v", m.show[tabJobs])
+	}
+
+	// On the owner row, backspace erases its text like any other field; only
+	// once that text is empty does backspace fall back to clearing the whole
+	// filter, rather than doing nothing.
+	m = setShow(t, m, "startedBy", "colleague")
+	m = setShow(t, m, "status", "failed")
+	m = step(t, m, key("f"))
+	for range []rune("colleague") {
+		m = step(t, m, key("backspace"))
+	}
+	if got := m.panel.draft.startedBy; got != "" {
+		t.Fatalf("backspace did not erase the owner row's text, left %q", got)
+	}
+	if len(m.panel.draft.status) == 0 {
+		t.Fatalf("erasing the owner row's text should not have touched status")
+	}
+	m = step(t, m, key("backspace"))
+	m = step(t, m, key("enter"))
+	if m.show[tabJobs].active() {
+		t.Errorf("backspace on the now-empty owner row should clear the whole filter, left %+v", m.show[tabJobs])
 	}
 }
 
@@ -551,7 +580,9 @@ func TestNarrowingSurvivesARestart(t *testing.T) {
 	}
 
 	// Clearing it is saved too, rather than coming back on the next start.
+	// c is pressed off the owner row, where a letter is typed text instead.
 	fresh = step(t, fresh, key("f"))
+	fresh = step(t, fresh, key("down"))
 	fresh = step(t, fresh, key("c"))
 	fresh = step(t, fresh, key("enter"))
 	again, err := state.Load(path)

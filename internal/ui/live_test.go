@@ -304,8 +304,7 @@ func TestLiveMyRuns(t *testing.T) {
 
 	// Narrowing further: only the failures, still server-side.
 	m = step(t, m, key("f"))
-	m = step(t, m, key("down")) // started by -> started by (username text)
-	m = step(t, m, key("down")) // -> status
+	m = step(t, m, key("down")) // started by -> status
 	m = step(t, m, key("right"))
 	m = step(t, m, key("right")) // running -> failed
 	m = step(t, m, key(" "))     // toggle failed on

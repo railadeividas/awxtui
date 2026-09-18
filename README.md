@@ -259,13 +259,18 @@ narrowed by:
 `↑↓` picks a row. Status is a set, not one choice — a run worth a look is
 usually failed or still running, both at once — so `←→` moves a highlight
 across running/failed/successful and `space` toggles the highlighted one in or
-out; the rest of the rows are still `←→` or `space` to cycle. "Started by" has
-a second row underneath for a username or a fragment of one (a deploy bot,
-a colleague), matched case-insensitively — typing there works like any other
-text field. `c` clears everything, `enter` applies and `esc` leaves without
-changing anything. The active narrowing shows in the count line —
-`mine · failed/running · 46` — so a short list is never mistaken for a small
-instance.
+out; the rest of the rows are still `←→` or `space` to cycle. "Started by" is
+one row that does both jobs: empty, `←→` or `space` toggles anyone/me exactly
+like any other row, but the moment a character is typed it becomes a
+username fragment instead (a deploy bot, a colleague), matched
+case-insensitively — "mine" can only ever mean the connected user, so finding
+anyone else means typing their name. Backspacing that text back to empty
+returns the row to the anyone/me toggle. `c` clears everything (typed off the
+"Started by" row, where a letter is just as likely to be someone's username);
+backspace does the same, and also doubles as the clear-all once "Started by"
+is empty. `enter` applies and `esc` leaves without changing anything. The
+active narrowing shows in the count line — `mine · failed/running · 46` — so
+a short list is never mistaken for a small instance.
 
 **A narrowed view is remembered**, in the same file as the pins and keyed the
 same way, per instance and per tab: leave the Jobs tab showing your own failed

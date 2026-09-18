@@ -75,13 +75,14 @@ var kindLabels = map[string]string{
 }
 
 // choiceKind is how a row's options are picked. kindCycle and kindMulti both
-// offer a fixed option list; kindText offers none and reads free text instead.
+// offer a fixed option list; kindOwner is a hybrid that starts as an
+// anyone/me toggle and turns into free text the moment a character is typed.
 type choiceKind int
 
 const (
 	kindCycle choiceKind = iota
 	kindMulti
-	kindText
+	kindOwner
 )
 
 // choice is one row of the panel: a question and the answers it accepts.
@@ -98,10 +99,14 @@ type option struct {
 }
 
 var (
-	ownerChoice = choice{field: "mine", title: "Started by", kind: kindCycle, options: []option{
+	// ownerChoice is one row that does two jobs: empty, it toggles between
+	// anyone and the connected user with ←→/space, same as any other cycle
+	// row; the moment a character is typed it becomes a free-text username
+	// fragment instead, because "me" can only ever mean the connected user
+	// and finding a colleague's or a deploy bot's runs needs their name.
+	ownerChoice = choice{field: "mine", title: "Started by", kind: kindOwner, options: []option{
 		{"anyone", ""}, {"me", "yes"},
 	}}
-	startedByChoice = choice{field: "startedBy", title: "…or username", kind: kindText}
 	// statusChoice offers no "any" option: an empty selection already means
 	// any, and a run is usually worth a look because it failed or is still
 	// running, which is two statuses at once, not one.
@@ -121,7 +126,7 @@ var (
 // status and a kind; everything else can only be narrowed to pins.
 func choicesFor(t tab) []choice {
 	if t == tabJobs {
-		return []choice{ownerChoice, startedByChoice, statusChoice, kindChoice, pinnedChoice}
+		return []choice{ownerChoice, statusChoice, kindChoice, pinnedChoice}
 	}
 	return []choice{pinnedChoice}
 }
@@ -215,8 +220,6 @@ func filterFromFields(t tab, fields map[string]string) showFilter {
 			continue
 		}
 		switch c.kind {
-		case kindText:
-			f.set(c.field, v)
 		case kindMulti:
 			var kept []string
 			for _, part := range strings.Split(v, ",") {
@@ -237,6 +240,13 @@ func filterFromFields(t tab, fields map[string]string) showFilter {
 				}
 			}
 		}
+	}
+	// startedBy has no row of its own to validate against — it shares the
+	// "Started by" row with the mine toggle, as free text with no fixed
+	// options — so it is restored unconditionally, the way the mine toggle
+	// no longer needs to be once it is typed over.
+	if t == tabJobs {
+		f.startedBy = fields["startedBy"]
 	}
 	return f
 }
@@ -266,7 +276,6 @@ func (p *showPanel) cycle(delta int) {
 
 func newStartedByInput() textinput.Model {
 	in := textinput.New()
-	in.Placeholder = "e.g. deploy-bot"
 	in.Prompt = ""
 	in.CharLimit = 64
 	in.TextStyle = inputStyle
@@ -280,22 +289,23 @@ func (m *Model) openShowPanel() {
 	in.SetValue(m.show[m.active].startedBy)
 	in.CursorEnd()
 	m.panel = showPanel{tab: m.active, draft: m.show[m.active], startedByInput: in}
-	if choicesFor(m.active)[0].kind == kindText {
+	if choicesFor(m.active)[0].kind == kindOwner {
 		m.panel.startedByInput.Focus()
 	}
 	m.mode = modeShow
 }
 
-// moveShowCursor moves the row cursor, blurring the text row if it is being
-// left and focusing it if it is being entered.
+// moveShowCursor moves the row cursor, blurring the owner row's input if it
+// is being left and focusing it if it is being entered — typing must work
+// the instant the row is landed on, with no separate step to start it.
 func (m *Model) moveShowCursor(delta int) tea.Cmd {
 	rows := choicesFor(m.panel.tab)
-	if rows[m.panel.cursor].kind == kindText {
+	if rows[m.panel.cursor].kind == kindOwner {
 		m.panel.startedByInput.Blur()
 	}
 	m.panel.cursor = clamp(m.panel.cursor+delta, 0, len(rows)-1)
 	m.panel.optCursor = 0
-	if rows[m.panel.cursor].kind == kindText {
+	if rows[m.panel.cursor].kind == kindOwner {
 		m.panel.startedByInput.CursorEnd()
 		return m.panel.startedByInput.Focus()
 	}
@@ -323,11 +333,12 @@ func (m Model) handleShowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := choicesFor(m.panel.tab)
 	cur := rows[m.panel.cursor]
 
-	// A text row reserves only navigation and exit keys; everything else,
-	// including letters that double as shortcuts on other rows ("c" to
-	// clear), is typed into the field. This is the same split the launch
-	// form uses between its choice rows and its text fields.
-	if cur.kind == kindText {
+	// The owner row reserves only navigation and exit keys, plus ←→/space to
+	// toggle anyone/me while its text is empty — exactly like any other
+	// cycle row. The moment it holds text, arrow keys and space stop being
+	// reserved and become ordinary editing inside the field, the same split
+	// the launch form uses between its choice rows and its text fields.
+	if cur.kind == kindOwner {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -343,9 +354,22 @@ func (m Model) handleShowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "shift+tab":
 			return m, m.moveShowCursor(-1)
 		}
+		if m.panel.startedByInput.Value() == "" {
+			switch msg.String() {
+			case "right", "left", " ":
+				m.panel.cycle(1)
+				return m, nil
+			case "backspace":
+				m.panel.draft = showFilter{}
+				return m, nil
+			}
+		}
 		var cmd tea.Cmd
 		m.panel.startedByInput, cmd = m.panel.startedByInput.Update(msg)
 		m.panel.draft.startedBy = m.panel.startedByInput.Value()
+		if m.panel.draft.startedBy != "" {
+			m.panel.draft.mine = false
+		}
 		return m, cmd
 	}
 
@@ -428,7 +452,7 @@ func (m Model) showModal() string {
 		if i == m.panel.cursor {
 			marker = helpKeyStyle.Render("▌ ")
 		}
-		if c.kind == kindText {
+		if c.kind == kindOwner && m.panel.startedByInput.Value() != "" {
 			b.WriteString(marker + cell(helpDescStyle.Render(c.title), 14) + m.panel.startedByInput.View())
 			b.WriteString("\n")
 			continue
@@ -467,7 +491,11 @@ func (m Model) showModal() string {
 				}
 			}
 		}
-		b.WriteString(marker + cell(helpDescStyle.Render(c.title), 14) + strings.Join(vals, dimStyle.Render("·")))
+		row := strings.Join(vals, dimStyle.Render("·"))
+		if c.kind == kindOwner {
+			row += dimStyle.Render(" · type a name…")
+		}
+		b.WriteString(marker + cell(helpDescStyle.Render(c.title), 14) + row)
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
