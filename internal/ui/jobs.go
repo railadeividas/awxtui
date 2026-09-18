@@ -158,15 +158,27 @@ func (m Model) jobBody(width int) []string {
 		field("inventory", rowStyle.Render(j.SummaryFields.Inventory.Name))
 	}
 
-	if !j.IsSync() {
+	switch {
+	case j.IsWorkflow():
+		// A workflow job launched from a real template names it here; the
+		// implicit workflow a sliced job template creates leaves this empty
+		// and carries job_template instead, which awxtui does not show —
+		// that job template is the one already named by the sliced run.
+		field("workflow template", rowStyle.Render(j.SummaryFields.WorkflowJobTemplate.Name))
+		field("limit", rowStyle.Render(j.Limit))
+		field("job tags", rowStyle.Render(j.JobTags))
+		field("skip tags", rowStyle.Render(j.SkipTags))
+	case !j.IsSync():
 		field("job template", rowStyle.Render(j.SummaryFields.JobTemplate.Name))
 		field("limit", rowStyle.Render(j.Limit))
 		field("job tags", rowStyle.Render(j.JobTags))
 		field("skip tags", rowStyle.Render(j.SkipTags))
 	}
-	field("credentials", rowStyle.Render(jobCredentials(j)))
-	if ee := j.SummaryFields.ExecutionEnvironment.Name; ee != "" {
-		field("execution env", rowStyle.Render(ee))
+	if !j.IsWorkflow() {
+		field("credentials", rowStyle.Render(jobCredentials(j)))
+		if ee := j.SummaryFields.ExecutionEnvironment.Name; ee != "" {
+			field("execution env", rowStyle.Render(ee))
+		}
 	}
 	if !j.IsSync() && strings.TrimSpace(j.ExtraVars) != "" {
 		lines = append(lines, "", titleStyle.Render("extra vars"))

@@ -284,7 +284,11 @@ func TestPinFromTheOutputView(t *testing.T) {
 }
 
 // /api/v2/unified_jobs/ serves kinds awxtui has no output endpoint for.
-func TestOpeningAWorkflowJobSaysItIsUnsupported(t *testing.T) {
+// TestOpeningAWorkflowJobShowsItsDetails checks that a workflow job in the
+// unified Jobs list opens its launch details rather than output: a workflow
+// job has no stdout of its own — its output lives per-node — so fetching
+// /api/v2/workflow_jobs/11/stdout/ would find nothing there to show.
+func TestOpeningAWorkflowJobShowsItsDetails(t *testing.T) {
 	srv := mockAWX(t)
 	m := onTab(t, srv, tabJobs)
 	for i, r := range m.visible(tabJobs) {
@@ -293,11 +297,14 @@ func TestOpeningAWorkflowJobSaysItIsUnsupported(t *testing.T) {
 		}
 	}
 	m = step(t, m, key("enter"))
-	if m.mode == modeOutput {
-		t.Fatalf("a workflow job has no output endpoint here; awxtui opened one anyway")
+	if m.err != nil {
+		t.Fatalf("opening workflow job details failed: %v", m.err)
 	}
-	if m.err == nil || !strings.Contains(m.err.Error(), "workflow job") {
-		t.Errorf("expected an error naming the kind, got %v", m.err)
+	if m.mode != modeJob {
+		t.Fatalf("expected launch details for a workflow job, got mode %v", m.mode)
+	}
+	if m.job.job.SummaryFields.WorkflowJobTemplate.Name != "Nightly pipeline" {
+		t.Errorf("expected the workflow template name, got %q", m.job.job.SummaryFields.WorkflowJobTemplate.Name)
 	}
 }
 

@@ -166,9 +166,10 @@ func mockAWX(t *testing.T) *mock {
 			"summary_fields": map[string]any{"created_by": map[string]any{"id": 1, "username": "admin"}},
 		},
 		map[string]any{
-			// A kind awxtui has no output endpoint for. Real AWX serves these
-			// from the unified list and nowhere awxtui reads.
-			"id": 11, "type": "workflow_job", "name": "Nightly pipeline", "status": "successful",
+			// A workflow job has no output endpoint of its own — its output
+			// lives per-node — but it does have a detail endpoint, and can
+			// be cancelled just like a playbook job.
+			"id": 11, "type": "workflow_job", "name": "Nightly pipeline", "status": "running",
 			"elapsed": 300.0, "started": now.Add(-3 * time.Hour),
 			"summary_fields": map[string]any{"created_by": map[string]any{"id": 1, "username": "admin"}},
 		},
@@ -456,6 +457,89 @@ func mockAWX(t *testing.T) *mock {
 	})
 	mux.HandleFunc("/api/v2/schedules/8/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, map[string]any{"id": 8, "enabled": false})
+	})
+
+	// Workflow job templates: 20 has plain prompts, 21 has a survey. Neither
+	// asks for a credential, execution environment, job type or verbosity —
+	// real AWX never offers those on a workflow's own launch form.
+	mux.HandleFunc("/api/v2/workflow_job_templates/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, page(filtered(r, []any{map[string]any{
+			"id": 20, "name": "Nightly pipeline", "description": "Backup, then rotate certs",
+			"status": "never updated",
+			"summary_fields": map[string]any{
+				"organization": map[string]any{"name": "Default"},
+				"inventory":    map[string]any{"name": "production"},
+			},
+		}, map[string]any{
+			"id": 21, "name": "Fleet rollout", "description": "Staged fleet-wide rollout",
+			"survey_enabled": true, "status": "successful", "last_job_run": now.Add(-3 * time.Hour),
+			"summary_fields": map[string]any{
+				"organization": map[string]any{"name": "Default"},
+				"inventory":    map[string]any{"name": "production"},
+			},
+		}})...))
+	})
+	workflowLaunch := func(id int, survey bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				write(w, map[string]any{
+					"can_start_without_user_input": true,
+					"variables_needed_to_start":    []string{},
+					"survey_enabled":               survey,
+					"ask_inventory_on_launch":      true,
+					"ask_limit_on_launch":          true,
+					"ask_labels_on_launch":         id == 21,
+					"defaults": map[string]any{
+						"limit": "", "scm_branch": "", "extra_vars": "{}",
+						"inventory": map[string]any{"id": 3, "name": "production"},
+						"labels":    []any{},
+					},
+				})
+				return
+			}
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, `{"detail":"bad payload"}`, http.StatusBadRequest)
+				return
+			}
+			mk.mu.Lock()
+			mk.launches = append(mk.launches, body)
+			mk.mu.Unlock()
+			write(w, map[string]any{"id": 44, "type": "workflow_job", "name": "Fleet rollout", "status": "pending"})
+		}
+	}
+	mux.HandleFunc("/api/v2/workflow_job_templates/20/launch/", workflowLaunch(20, false))
+	mux.HandleFunc("/api/v2/workflow_job_templates/21/launch/", workflowLaunch(21, true))
+	mux.HandleFunc("/api/v2/workflow_job_templates/21/survey_spec/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, map[string]any{"name": "Rollout options", "spec": []any{
+			map[string]any{"type": "text", "variable": "wave", "question_name": "Rollout wave",
+				"required": true, "default": ""},
+		}})
+	})
+	// The workflow job the unified list already carries (#11) and the one a
+	// launch creates (#44) both need their own detail endpoint: a workflow
+	// job has no stdout, so awxtui reads it through the same detail view as
+	// a job template's launch details rather than /stdout/.
+	mux.HandleFunc("/api/v2/workflow_jobs/11/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, map[string]any{
+			"id": 11, "type": "workflow_job", "name": "Nightly pipeline", "status": "running",
+			"elapsed": 300.0, "started": now.Add(-3 * time.Hour), "extra_vars": "{}",
+			"summary_fields": map[string]any{
+				"inventory":             map[string]any{"id": 3, "name": "production"},
+				"workflow_job_template": map[string]any{"id": 20, "name": "Nightly pipeline"},
+			},
+		})
+	})
+	mux.HandleFunc("/api/v2/workflow_jobs/11/cancel/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	})
+	mux.HandleFunc("/api/v2/workflow_jobs/44/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, map[string]any{
+			"id": 44, "type": "workflow_job", "name": "Fleet rollout", "status": "pending",
+			"summary_fields": map[string]any{
+				"workflow_job_template": map[string]any{"id": 21, "name": "Fleet rollout"},
+			},
+		})
 	})
 
 	// ---- syncing ----
@@ -874,7 +958,7 @@ func TestEveryViewRendersWithinTerminalBounds(t *testing.T) {
 		m := New(awx.New(srv.URL, "test-token", false))
 		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = step(t, m, m.connect())
-		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc"} {
+		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc", "6", "enter", "G", "esc"} {
 			m = step(t, m, key(k))
 			out := m.View()
 			for i, line := range strings.Split(out, "\n") {

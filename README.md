@@ -96,11 +96,11 @@ AWX has said who you are.
 
 | Key | Action |
 | --- | --- |
-| `1`–`5`, `tab` | switch between Templates, Jobs, Inventories, Projects, Schedules |
+| `1`–`6`, `tab` | switch between Templates, Jobs, Inventories, Projects, Schedules, Workflows |
 | `↑` `↓` / `j` `k` | move; `ctrl+d` / `ctrl+u` half page, `g` / `G` top / bottom |
 | `/` | search the current view (`esc` clears) |
 | `i` | switch to another configured instance |
-| `enter` | launch a template · open job output · open project, inventory or schedule details |
+| `enter` | launch a template or workflow · open job output · open project, inventory or schedule details · for a workflow job: its launch details |
 | `s` | sync: SCM update a project · update an inventory's sources |
 | `t` | on the Schedules tab or a schedule's details: enable or disable it |
 | `h` | inside inventory details: list its hosts |
@@ -208,6 +208,26 @@ Toggling is the only write this tab makes: `PATCH /api/v2/schedules/{id}/`
 with `{"enabled": ...}`, touching nothing else about the schedule. Like
 syncing, it is refused outright on a read-only client and a held-down `t`
 cannot fire the same PATCH twice.
+
+## Workflow job templates
+
+The Workflows tab reads `/api/v2/workflow_job_templates/` and launches them
+the same way the Templates tab launches a job template — `enter` reads
+`/launch/` and `/survey_spec/` and builds a form — but a workflow's own form
+is smaller: it can only ever ask for inventory, limit, SCM branch, tags,
+labels and its survey, never a credential, execution environment, job type
+or verbosity, since those belong to the job templates inside the workflow,
+not the workflow itself. `LaunchConfig` is shared with job templates, so a
+flag a workflow never sets just stays at its zero value rather than needing a
+type of its own.
+
+Launching answers with a workflow job, listed on the Jobs tab beside every
+other kind of run. A workflow job has no stdout of its own — its output is
+per-node, under `/workflow_nodes/`, which awxtui does not render yet — so
+`enter` and `d` both open its launch details (status, launch type, inventory,
+limit, tags, extra vars) instead of trying to open output that does not
+exist. `c` still cancels it, through its own `/api/v2/workflow_jobs/{id}/
+cancel/` rather than `/api/v2/jobs/`.
 
 ## Pinning and narrowing a view
 
@@ -439,6 +459,10 @@ the first page and merging it, so the pages you scrolled through stay put.
 
 ## Not done yet
 
-- Workflow job templates and ad-hoc commands.
-- Creating, editing or deleting a schedule: the Schedules tab reads and
-  toggles, but building an rrule is not done.
+- Ad-hoc commands.
+- A workflow's own graph: the Workflows tab lists and launches, and a
+  workflow job shows its launch details, but the nodes themselves — their
+  order, approvals, and each node's own status — are not rendered. Look at
+  `/workflow_nodes/` in the AWX UI for that.
+- Creating, editing or deleting a workflow job template, or a schedule: both
+  tabs read (and a schedule toggles), but building either is not done.

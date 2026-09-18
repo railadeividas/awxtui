@@ -133,16 +133,22 @@ func (f *formField) blur() {
 	}
 }
 
-// form is the launch dialog for one job template.
+// form is the launch dialog for one job template or workflow job template.
+// isWorkflow says which of template/workflowTemplate holds the record being
+// launched — a workflow has no playbook, project or credentials of its own,
+// so the rest of the form only ever offers the strict subset of prompts a
+// workflow can ask for.
 type form struct {
-	template awx.JobTemplate
-	config   awx.LaunchConfig
-	survey   awx.SurveySpec
-	fields   []formField
-	cursor   int
-	offset   int
-	problem  string
-	width    int
+	isWorkflow       bool
+	template         awx.JobTemplate
+	workflowTemplate awx.WorkflowJobTemplate
+	config           awx.LaunchConfig
+	survey           awx.SurveySpec
+	fields           []formField
+	cursor           int
+	offset           int
+	problem          string
+	width            int
 
 	// pickOffset scrolls the full-list picker opened on the focused
 	// fMultiChoice field; it is meaningless otherwise.
@@ -209,11 +215,41 @@ func idListField(key, label string, items []idChoice, defaults []awx.NamedRef) (
 	return fl, true
 }
 
+// name is the record being launched, for the form's title.
+func (f form) name() string {
+	if f.isWorkflow {
+		return f.workflowTemplate.Name
+	}
+	return f.template.Name
+}
+
+// id is the template id to launch, for the form's title.
+func (f form) id() int {
+	if f.isWorkflow {
+		return f.workflowTemplate.ID
+	}
+	return f.template.ID
+}
+
+// launchID is the same id, named for where it is used: the id to POST
+// /launch/ to.
+func (f form) launchID() int { return f.id() }
+
 // newForm builds the fields a template needs: the ask_*_on_launch prompts, the
-// survey questions, and any credential passwords.
+// survey questions, and any credential passwords. A workflow's config never
+// sets the flags a job template's node-specific prompts depend on — job type,
+// verbosity, credentials, execution environment, forks, slices, timeout — so
+// those fields are simply never added.
 func newForm(src launchFormMsg, width int) form {
-	t, cfg, spec, inventories := src.template, src.config, src.survey, src.inventories
-	f := form{template: t, config: cfg, survey: spec, width: width}
+	cfg, spec, inventories := src.config, src.survey, src.inventories
+	f := form{
+		isWorkflow:       src.isWorkflow,
+		template:         src.template,
+		workflowTemplate: src.workflowTemplate,
+		config:           cfg,
+		survey:           spec,
+		width:            width,
+	}
 	d := cfg.Defaults
 	inputWidth := min(max(width-34, 16), 60)
 

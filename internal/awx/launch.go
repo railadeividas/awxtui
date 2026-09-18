@@ -222,6 +222,45 @@ func (c *Client) Launch(ctx context.Context, templateID int, payload map[string]
 	return j, err
 }
 
+// WorkflowLaunchConfig is the GET /workflow_job_templates/{id}/launch/
+// metadata. It shares LaunchConfig's shape: a workflow only ever asks for a
+// strict subset of what a job template can — inventory, limit, SCM branch,
+// tags, labels and its survey, never credentials, verbosity or an execution
+// environment, which belong to its nodes instead — so every field a workflow
+// never sets simply stays at its zero value.
+func (c *Client) WorkflowLaunchConfig(ctx context.Context, templateID int) (LaunchConfig, error) {
+	var cfg LaunchConfig
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v2/workflow_job_templates/%d/launch/", templateID), nil, &cfg)
+	return cfg, err
+}
+
+// WorkflowSurveySpec reads a workflow job template's survey.
+func (c *Client) WorkflowSurveySpec(ctx context.Context, templateID int) (SurveySpec, error) {
+	var spec SurveySpec
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v2/workflow_job_templates/%d/survey_spec/", templateID), nil, &spec)
+	return spec, err
+}
+
+// LaunchWorkflow starts a workflow job template, answering with the workflow
+// job it created.
+func (c *Client) LaunchWorkflow(ctx context.Context, templateID int, payload map[string]any) (Job, error) {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return Job{}, err
+	}
+	var j Job
+	err = c.do(ctx, http.MethodPost,
+		fmt.Sprintf("/api/v2/workflow_job_templates/%d/launch/", templateID),
+		strings.NewReader(string(raw)), &j)
+	if j.Type == "" {
+		j.Type = ResourceWorkflowJobs.recordType()
+	}
+	return j, err
+}
+
 // ParseVars reads extra variables written as either JSON or YAML and requires
 // the result to be a mapping, which is what AWX expects for extra_vars.
 func ParseVars(s string) (map[string]any, error) {

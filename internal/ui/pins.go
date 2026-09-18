@@ -27,6 +27,8 @@ func pinGroup(t tab) string {
 		return state.GroupProjects
 	case tabSchedules:
 		return state.GroupSchedules
+	case tabWorkflows:
+		return state.GroupWorkflows
 	default:
 		return state.GroupTemplates
 	}
@@ -90,6 +92,8 @@ func (m *Model) rebuild(t tab) {
 		m.rows[t] = m.projectRows(m.projects)
 	case tabSchedules:
 		m.rows[t] = m.scheduleRows(m.schedules)
+	case tabWorkflows:
+		m.rows[t] = m.workflowRows(m.workflows)
 	}
 }
 
@@ -122,6 +126,10 @@ func (m *Model) togglePinSelected() tea.Cmd {
 	case tabSchedules:
 		if s, ok := m.selectedSchedule(); ok {
 			name = s.Name
+		}
+	case tabWorkflows:
+		if t, ok := m.selectedWorkflow(); ok {
+			name = t.Name
 		}
 	}
 	return m.togglePin(m.active, r.id, name, kind)
@@ -178,8 +186,9 @@ func inPinnedOrder[T any](ids []int, found []T, idOf func(T) int) []T {
 	return out
 }
 
-func jobID(j awx.Job) int              { return j.ID }
-func templateID(t awx.JobTemplate) int { return t.ID }
-func inventoryID(i awx.Inventory) int  { return i.ID }
-func projectID(p awx.Project) int      { return p.ID }
-func scheduleID(s awx.Schedule) int    { return s.ID }
+func jobID(j awx.Job) int                      { return j.ID }
+func templateID(t awx.JobTemplate) int         { return t.ID }
+func inventoryID(i awx.Inventory) int          { return i.ID }
+func projectID(p awx.Project) int              { return p.ID }
+func scheduleID(s awx.Schedule) int            { return s.ID }
+func workflowID(w awx.WorkflowJobTemplate) int { return w.ID }

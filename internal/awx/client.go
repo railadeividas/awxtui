@@ -295,6 +295,51 @@ func (c *Client) JobTemplates(ctx context.Context, pageURL, search string) (Page
 	return listPage[JobTemplate](ctx, c, firstOr(pageURL, listURL("/api/v2/job_templates/", "name", PageSize, search)))
 }
 
+// WorkflowJobTemplate is a launchable workflow: a graph of nodes, each
+// running its own job template, project sync or inventory sync. Unlike a
+// JobTemplate it has no playbook or credentials of its own — those belong to
+// its nodes — so launching one only ever prompts for what the workflow itself
+// asks: inventory, limit, SCM branch, tags, labels, survey answers.
+type WorkflowJobTemplate struct {
+	ID            int        `json:"id"`
+	Name          string     `json:"name"`
+	Description   string     `json:"description"`
+	SurveyEnabled bool       `json:"survey_enabled"`
+	Status        string     `json:"status"`
+	LastJobRun    *time.Time `json:"last_job_run"`
+	LastJobFailed bool       `json:"last_job_failed"`
+	SummaryFields struct {
+		Organization struct {
+			Name string `json:"name"`
+		} `json:"organization"`
+		Inventory struct {
+			Name string `json:"name"`
+		} `json:"inventory"`
+	} `json:"summary_fields"`
+}
+
+// LastRunStatus normalises Status for display: AWX says "never updated" for
+// a workflow that has never run, where every other status badge in awxtui
+// expects an empty string instead.
+func (t WorkflowJobTemplate) LastRunStatus() string {
+	if t.Status == "never updated" {
+		return ""
+	}
+	return t.Status
+}
+
+// WorkflowJobTemplates returns a page of workflow job templates. Pass the
+// Next value of a previous page to continue; an empty pageURL starts at the
+// beginning.
+func (c *Client) WorkflowJobTemplates(ctx context.Context, pageURL, search string) (Page[WorkflowJobTemplate], error) {
+	return listPage[WorkflowJobTemplate](ctx, c, firstOr(pageURL, listURL("/api/v2/workflow_job_templates/", "name", PageSize, search)))
+}
+
+// WorkflowJobTemplatesByID reads a set of workflow job templates by id.
+func (c *Client) WorkflowJobTemplatesByID(ctx context.Context, ids []int) ([]WorkflowJobTemplate, error) {
+	return listByIDs[WorkflowJobTemplate](ctx, c, "/api/v2/workflow_job_templates/", ids)
+}
+
 // Schedule is a recurrence rule that launches a job template, project
 // update, inventory sync or system job on its own. AWX auto-creates a few
 // system-job schedules (cleanup, activity stream) alongside user ones.
@@ -374,6 +419,14 @@ type Job struct {
 			ID   int    `json:"id"`
 			Name string `json:"name"`
 		} `json:"job_template"`
+		// WorkflowJobTemplate is set instead of JobTemplate when this record
+		// is a workflow job. AWX leaves it null for the implicit workflow a
+		// sliced job template creates, which is how one is told apart from a
+		// run launched from a real workflow job template.
+		WorkflowJobTemplate struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		} `json:"workflow_job_template"`
 		Credentials []struct {
 			ID   int    `json:"id"`
 			Name string `json:"name"`
@@ -401,6 +454,7 @@ const (
 	ResourceJobs             Resource = "jobs"
 	ResourceProjectUpdates   Resource = "project_updates"
 	ResourceInventoryUpdates Resource = "inventory_updates"
+	ResourceWorkflowJobs     Resource = "workflow_jobs"
 )
 
 // eventsPath is the events sub-resource of a collection. Playbook jobs call it
@@ -421,6 +475,8 @@ func (r Resource) recordType() string {
 		return "project_update"
 	case ResourceInventoryUpdates:
 		return "inventory_update"
+	case ResourceWorkflowJobs:
+		return "workflow_job"
 	default:
 		return "job"
 	}
@@ -430,7 +486,7 @@ func (r Resource) recordType() string {
 // puts in the record itself. An unknown or missing type falls back to jobs,
 // which is what every record served from /api/v2/jobs/ is.
 func (j Job) Resource() Resource {
-	for _, r := range []Resource{ResourceProjectUpdates, ResourceInventoryUpdates} {
+	for _, r := range []Resource{ResourceProjectUpdates, ResourceInventoryUpdates, ResourceWorkflowJobs} {
 		if j.Type == r.recordType() {
 			return r
 		}
@@ -440,7 +496,15 @@ func (j Job) Resource() Resource {
 
 // IsSync reports whether this run is a project update or an inventory sync
 // rather than a playbook job.
-func (j Job) IsSync() bool { return j.Resource() != ResourceJobs }
+func (j Job) IsSync() bool {
+	return j.Resource() != ResourceJobs && j.Resource() != ResourceWorkflowJobs
+}
+
+// IsWorkflow reports whether this run is a workflow job: a graph of nodes
+// rather than a single playbook run. A workflow job has no stdout of its
+// own — its output lives per-node, under /workflow_nodes/, which awxtui does
+// not render yet — so it is shown as launch details rather than output.
+func (j Job) IsWorkflow() bool { return j.Type == "workflow_job" }
 
 // IsRunning reports whether the job may still produce output.
 func (j Job) IsRunning() bool {
@@ -460,10 +524,12 @@ func (c *Client) Jobs(ctx context.Context, pageURL, search string) (Page[Job], e
 // so they are paged in on demand rather than read whole.
 const jobsPageSize = 100
 
-// Supported reports whether awxtui can read this run. /api/v2/unified_jobs/
-// also serves workflow jobs, ad hoc commands and system jobs, which live in
-// collections awxtui does not implement; Resource would quietly call them
-// jobs and then ask /api/v2/jobs/ for output that is not there.
+// Supported reports whether awxtui can show this run's output.
+// /api/v2/unified_jobs/ also serves ad hoc commands and system jobs, which
+// live in collections awxtui does not implement, and workflow jobs, which
+// have no stdout of their own — their output lives per-node. Resource would
+// quietly call an ad hoc command or system job a job and then ask
+// /api/v2/jobs/ for output that is not there.
 func (j Job) Supported() bool {
 	switch j.Type {
 	case "", ResourceJobs.recordType(),
