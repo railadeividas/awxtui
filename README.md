@@ -253,13 +253,19 @@ narrowed by:
 
 | Tab | Choices |
 | --- | --- |
-| Jobs | started by anyone / me · status any / running / failed / successful · kind anything / jobs / project updates / inventory syncs · everything / pinned only |
+| Jobs | started by anyone / me, or a typed username · status: any of running / failed / successful, several at once · kind anything / jobs / project updates / inventory syncs · everything / pinned only |
 | Templates, Inventories, Projects | everything / pinned only |
 
-`↑↓` picks a row, `←→` or `space` sets it, `c` clears everything, `enter`
-applies and `esc` leaves without changing anything. The active narrowing shows
-in the count line — `mine · failed · 46` — so a short list is never mistaken
-for a small instance.
+`↑↓` picks a row. Status is a set, not one choice — a run worth a look is
+usually failed or still running, both at once — so `←→` moves a highlight
+across running/failed/successful and `space` toggles the highlighted one in or
+out; the rest of the rows are still `←→` or `space` to cycle. "Started by" has
+a second row underneath for a username or a fragment of one (a deploy bot,
+a colleague), matched case-insensitively — typing there works like any other
+text field. `c` clears everything, `enter` applies and `esc` leaves without
+changing anything. The active narrowing shows in the count line —
+`mine · failed/running · 46` — so a short list is never mistaken for a small
+instance.
 
 **A narrowed view is remembered**, in the same file as the pins and keyed the
 same way, per instance and per tab: leave the Jobs tab showing your own failed
@@ -271,10 +277,11 @@ saved as plain names, so adding one to the panel later cannot strand what is
 already saved.
 
 Every choice is sent to AWX, not applied to the rows that happen to be
-loaded: `created_by`, `status` and `type` as query parameters, and a
-pinned-only view as one `?id__in=` request. Lists are paged, so filtering what
-is on screen would hide everything that is not. `/` still searches, inside
-whatever the view is narrowed to.
+loaded: `created_by`, `created_by__username__icontains`, `status__in` (a
+comma list, for several statuses at once) and `type` as query parameters, and
+a pinned-only view as one `?id__in=` request. Lists are paged, so filtering
+what is on screen would hide everything that is not. `/` still searches,
+inside whatever the view is narrowed to.
 
 The key line marks what is already in force: `p` reads **unpin** on a pinned
 row, `f` **show** on a narrowed list, and in the output view `f` **follow**

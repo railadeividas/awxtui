@@ -114,10 +114,28 @@ func mockAWX(t *testing.T) *mock {
 				by, _ := sf["created_by"].(map[string]any)
 				return fmt.Sprint(by["id"])
 			}
+			createdByUsername := func(rec map[string]any) string {
+				sf, _ := rec["summary_fields"].(map[string]any)
+				by, _ := sf["created_by"].(map[string]any)
+				return fmt.Sprint(by["username"])
+			}
 			if !match(rec, "created_by", createdBy) ||
-				!match(rec, "status", func(rec map[string]any) string { return fmt.Sprint(rec["status"]) }) ||
 				!match(rec, "type", func(rec map[string]any) string { return fmt.Sprint(rec["type"]) }) {
 				continue
+			}
+			if statuses := q.Get("status__in"); statuses != "" {
+				found := false
+				for _, s := range strings.Split(statuses, ",") {
+					found = found || s == fmt.Sprint(rec["status"])
+				}
+				if !found {
+					continue
+				}
+			}
+			if frag := strings.ToLower(q.Get("created_by__username__icontains")); frag != "" {
+				if !strings.Contains(strings.ToLower(createdByUsername(rec)), frag) {
+					continue
+				}
 			}
 			kept = append(kept, it)
 		}
@@ -987,7 +1005,7 @@ func TestEveryViewRendersWithinTerminalBounds(t *testing.T) {
 		m := New(awx.New(srv.URL, "test-token", false))
 		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = step(t, m, m.connect())
-		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc", "6", "enter", "G", "esc", "2", "G", "enter", "esc"} {
+		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc", "6", "enter", "G", "esc", "2", "f", "down", "down", "right", "right", "space", "down", "enter", "2", "f", "down", "d", "e", "p", "l", "o", "y", "esc", "G", "enter", "esc"} {
 			m = step(t, m, key(k))
 			out := m.View()
 			for i, line := range strings.Split(out, "\n") {

@@ -304,10 +304,12 @@ func TestLiveMyRuns(t *testing.T) {
 
 	// Narrowing further: only the failures, still server-side.
 	m = step(t, m, key("f"))
-	m = step(t, m, key("down"))
+	m = step(t, m, key("down")) // started by -> started by (username text)
+	m = step(t, m, key("down")) // -> status
 	m = step(t, m, key("right"))
-	m = step(t, m, key("right"))
-	if got := m.panel.draft.status; got != "failed" {
+	m = step(t, m, key("right")) // running -> failed
+	m = step(t, m, key(" "))     // toggle failed on
+	if got := m.panel.draft.status; len(got) != 1 || got[0] != "failed" {
 		t.Fatalf("expected the status choice to land on failed, got %q", got)
 	}
 	m = step(t, m, key("enter"))

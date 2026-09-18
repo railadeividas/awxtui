@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -248,7 +249,11 @@ func (m *Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 
 // jobFilter turns what the Jobs tab is showing into the query AWX runs.
 func (m Model) jobFilter() awx.JobFilter {
-	f := awx.JobFilter{Status: m.show[tabJobs].status, Type: m.show[tabJobs].kind}
+	f := awx.JobFilter{
+		Status:            m.show[tabJobs].status,
+		Type:              m.show[tabJobs].kind,
+		CreatedByUsername: m.show[tabJobs].startedBy,
+	}
 	if m.show[tabJobs].mine {
 		f.CreatedBy = m.userID
 	}
@@ -279,13 +284,16 @@ func (m Model) pinnedCmd(t tab, meta pageMeta) tea.Cmd {
 			// filter would hide a pin instead of listing it as it is.
 			var kept []awx.Job
 			for _, j := range found {
-				if keep.status != "" && j.Status != keep.status {
+				if len(keep.status) > 0 && !slices.Contains(keep.status, j.Status) {
 					continue
 				}
 				if keep.kind != "" && j.Type != keep.kind {
 					continue
 				}
 				if keep.mine && j.SummaryFields.CreatedBy.Username != me {
+					continue
+				}
+				if keep.startedBy != "" && !strings.Contains(strings.ToLower(j.SummaryFields.CreatedBy.Username), strings.ToLower(keep.startedBy)) {
 					continue
 				}
 				kept = append(kept, j)
