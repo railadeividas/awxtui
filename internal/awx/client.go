@@ -295,6 +295,48 @@ func (c *Client) JobTemplates(ctx context.Context, pageURL, search string) (Page
 	return listPage[JobTemplate](ctx, c, firstOr(pageURL, listURL("/api/v2/job_templates/", "name", PageSize, search)))
 }
 
+// Schedule is a recurrence rule that launches a job template, project
+// update, inventory sync or system job on its own. AWX auto-creates a few
+// system-job schedules (cleanup, activity stream) alongside user ones.
+type Schedule struct {
+	ID            int        `json:"id"`
+	Name          string     `json:"name"`
+	Description   string     `json:"description"`
+	RRule         string     `json:"rrule"`
+	Enabled       bool       `json:"enabled"`
+	NextRun       *time.Time `json:"next_run"`
+	Timezone      string     `json:"timezone"`
+	Created       *time.Time `json:"created"`
+	Modified      *time.Time `json:"modified"`
+	SummaryFields struct {
+		UnifiedJobTemplate struct {
+			ID             int    `json:"id"`
+			Name           string `json:"name"`
+			UnifiedJobType string `json:"unified_job_type"`
+		} `json:"unified_job_template"`
+		UserCapabilities struct {
+			Edit bool `json:"edit"`
+		} `json:"user_capabilities"`
+	} `json:"summary_fields"`
+}
+
+// Schedules returns a page of every schedule across all templates and
+// projects. Pass the Next value of a previous page to continue; an empty
+// pageURL starts at the beginning.
+func (c *Client) Schedules(ctx context.Context, pageURL, search string) (Page[Schedule], error) {
+	return listPage[Schedule](ctx, c, firstOr(pageURL, listURL("/api/v2/schedules/", "name", PageSize, search)))
+}
+
+// SetScheduleEnabled flips a schedule's enabled flag without touching its
+// recurrence rule or any other field.
+func (c *Client) SetScheduleEnabled(ctx context.Context, id int, enabled bool) error {
+	body, err := json.Marshal(map[string]bool{"enabled": enabled})
+	if err != nil {
+		return err
+	}
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("/api/v2/schedules/%d/", id), bytes.NewReader(body), nil)
+}
+
 // Job is a single (running or finished) run of something: a playbook job, a
 // project SCM update or an inventory sync. AWX serialises all three with the
 // same core fields and tells them apart with Type.
@@ -513,6 +555,11 @@ func (c *Client) InventoriesByID(ctx context.Context, ids []int) ([]Inventory, e
 // ProjectsByID reads a set of projects by id.
 func (c *Client) ProjectsByID(ctx context.Context, ids []int) ([]Project, error) {
 	return listByIDs[Project](ctx, c, "/api/v2/projects/", ids)
+}
+
+// SchedulesByID reads a set of schedules by id.
+func (c *Client) SchedulesByID(ctx context.Context, ids []int) ([]Schedule, error) {
+	return listByIDs[Schedule](ctx, c, "/api/v2/schedules/", ids)
 }
 
 // UnifiedJob re-reads one run of any kind, for the status and elapsed time a

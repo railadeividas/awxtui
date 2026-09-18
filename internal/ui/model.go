@@ -22,10 +22,11 @@ const (
 	tabJobs
 	tabInventories
 	tabProjects
+	tabSchedules
 	tabCount
 )
 
-var tabNames = [tabCount]string{"Templates", "Jobs", "Inventories", "Projects"}
+var tabNames = [tabCount]string{"Templates", "Jobs", "Inventories", "Projects", "Schedules"}
 
 type mode int
 
@@ -43,6 +44,7 @@ const (
 	modeShow
 	modePick
 	modeJob
+	modeSchedule
 )
 
 const (
@@ -123,6 +125,7 @@ type Model struct {
 	jobs        []awx.Job
 	inventories []awx.Inventory
 	projects    []awx.Project
+	schedules   []awx.Schedule
 
 	filterInput textinput.Model
 	spin        spinner.Model
@@ -162,6 +165,13 @@ type Model struct {
 
 	// details of the selected inventory, including its sources' sync status
 	inventory inventoryDetail
+
+	// details of the selected schedule
+	schedule scheduleDetail
+
+	// toggling is set while a schedule-enabled PATCH is in flight, so a held-down
+	// key cannot start the same toggle twice.
+	toggling bool
 
 	// launch details of the selected job
 	job jobDetail
@@ -579,6 +589,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampAll()
 		return m, m.continueLoad(tabProjects)
 
+	case schedulesMsg:
+		if msg.gen != m.gen || msg.seq != m.searchSeq[tabSchedules] {
+			return m, nil // a newer search, or another instance, has replaced it
+		}
+		m.fetching[tabSchedules], m.searching[tabSchedules] = false, false
+		if msg.cont {
+			m.schedules = append(m.schedules, msg.items...)
+		} else {
+			m.schedules = msg.items
+			m.serverQuery[tabSchedules] = msg.query
+		}
+		m.rows[tabSchedules] = m.scheduleRows(m.schedules)
+		m.next[tabSchedules] = msg.next
+		m.count[tabSchedules] = msg.count
+		m.loaded[tabSchedules] = true
+		m.clampAll()
+		return m, m.continueLoad(tabSchedules)
+
+	case scheduleToggledMsg:
+		m.toggling = false
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		for i := range m.schedules {
+			if m.schedules[i].ID == msg.id {
+				m.schedules[i].Enabled = msg.enabled
+				break
+			}
+		}
+		m.rows[tabSchedules] = m.scheduleRows(m.schedules)
+		if m.schedule.schedule.ID == msg.id {
+			m.schedule.schedule.Enabled = msg.enabled
+		}
+		return m, nil
+
 	case hostsMsg:
 		if msg.gen != m.gen {
 			return m, nil
@@ -822,6 +871,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeInventory:
 		return m.handleInventoryKey(msg)
 
+	case modeSchedule:
+		return m.handleScheduleKey(msg)
+
 	case modeJob:
 		return m.handleJobKey(msg)
 
@@ -890,7 +942,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "left", "h":
 		m.active = (m.active + tabCount - 1) % tabCount
 		return m, m.afterTabSwitch()
-	case "1", "2", "3", "4":
+	case "1", "2", "3", "4", "5":
 		m.active = tab(key[0] - '1')
 		return m, m.afterTabSwitch()
 	case "/":
@@ -918,6 +970,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.activate()
 	case "s":
 		return m.sync()
+	case "t":
+		if m.active == tabSchedules {
+			return m, m.toggleSelectedScheduleEnabled()
+		}
 	case "f":
 		m.openShowPanel()
 		return m, nil
@@ -996,6 +1052,13 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.openProject(p)
+
+	case tabSchedules:
+		s, ok := m.selectedSchedule()
+		if !ok {
+			return m, nil
+		}
+		return m, m.openSchedule(s)
 	}
 	return m, nil
 }

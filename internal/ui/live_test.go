@@ -421,3 +421,43 @@ func TestLiveProjectDetails(t *testing.T) {
 		m = step(t, m, key("esc"))
 	}
 }
+
+// TestLiveSchedules opens the details of every real schedule. The client is
+// read-only, so this only ever issues GETs — it never calls
+// SetScheduleEnabled.
+//
+//	AWXTUI_LIVE=1 AWXTUI_SHOW=1 go test -v ./internal/ui -run TestLiveSchedules
+func TestLiveSchedules(t *testing.T) {
+	if os.Getenv("AWXTUI_LIVE") == "" {
+		t.Skip("set AWXTUI_LIVE=1 to run against a real AWX instance")
+	}
+	url, token := os.Getenv("AWX_URL"), os.Getenv("AWX_TOKEN")
+	if url == "" || token == "" {
+		t.Skip("AWX_URL and AWX_TOKEN must be set")
+	}
+
+	m := New(awx.New(url, token, os.Getenv("AWX_INSECURE") != "").ReadOnly())
+	m = step(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = step(t, m, m.connect())
+	if m.err != nil {
+		t.Fatalf("connect failed: %v", m.err)
+	}
+	m = step(t, m, key("5"))
+	if len(m.schedules) == 0 {
+		t.Skip("no schedules on this instance")
+	}
+
+	for i, s := range m.schedules {
+		m.cursor[tabSchedules] = i
+		m = step(t, m, key("enter"))
+		if m.mode != modeSchedule {
+			t.Fatalf("details did not open for %q: mode %v err %v", s.Name, m.mode, m.err)
+		}
+		t.Logf("%s (#%d): runs %s %q, enabled=%v, next run %v",
+			s.Name, s.ID, s.SummaryFields.UnifiedJobTemplate.UnifiedJobType,
+			s.SummaryFields.UnifiedJobTemplate.Name, s.Enabled, s.NextRun)
+		show(t, "live schedule details: "+s.Name, m.View())
+		m = step(t, m, key("G"))
+		m = step(t, m, key("esc"))
+	}
+}

@@ -96,12 +96,13 @@ AWX has said who you are.
 
 | Key | Action |
 | --- | --- |
-| `1`–`4`, `tab` | switch between Templates, Jobs, Inventories, Projects |
+| `1`–`5`, `tab` | switch between Templates, Jobs, Inventories, Projects, Schedules |
 | `↑` `↓` / `j` `k` | move; `ctrl+d` / `ctrl+u` half page, `g` / `G` top / bottom |
 | `/` | search the current view (`esc` clears) |
 | `i` | switch to another configured instance |
-| `enter` | launch a template · open job output · open project or inventory details |
+| `enter` | launch a template · open job output · open project, inventory or schedule details |
 | `s` | sync: SCM update a project · update an inventory's sources |
+| `t` | on the Schedules tab or a schedule's details: enable or disable it |
 | `h` | inside inventory details: list its hosts |
 | `p` | pin the highlighted record, or the run whose output is open |
 | `f` | narrow the view: pinned only, and on Jobs also owner, status and kind |
@@ -187,6 +188,26 @@ its new status shows.
 
 Syncing is a write: a read-only client refuses it before anything reaches the
 network, and a held-down `s` cannot start the same update twice.
+
+## Schedules
+
+The Schedules tab reads `/api/v2/schedules/`, the one global list in AWX: every
+recurrence rule across every job template, project and inventory, plus the
+system jobs AWX schedules for itself (cleanup, activity stream). `enter` opens
+a schedule's details — its rrule, timezone, next run and what it launches; `t`
+enables or disables it, on the list or from the details view.
+
+AWX tells a schedule's target apart by `summary_fields.unified_job_template
+.unified_job_type` (`job`, `project_update`, `inventory_update`, `system_job`,
+`workflow_job`), not by which collection it came from — there is no
+`/api/v2/job_templates/{id}/schedules/`-style split the way inventory sources
+split by inventory. The "type" column shows this, so a system cleanup schedule
+doesn't get mistaken for one that runs a real playbook.
+
+Toggling is the only write this tab makes: `PATCH /api/v2/schedules/{id}/`
+with `{"enabled": ...}`, touching nothing else about the schedule. Like
+syncing, it is refused outright on a read-only client and a held-down `t`
+cannot fire the same PATCH twice.
 
 ## Pinning and narrowing a view
 
@@ -342,6 +363,7 @@ that look like a failed load.
 | `internal/ui/jobs.go` | job launch details: what a run was started with |
 | `internal/ui/projects.go` | project details: SCM settings, update flags |
 | `internal/ui/inventories.go` | inventory details: each source's real sync status |
+| `internal/ui/schedules.go` | schedule details: rrule, next run, enable/disable |
 | `internal/ui/table.go` | responsive column layout (columns shrink, then drop) |
 | `internal/ui/pins.go` | pinning, on every tab |
 | `internal/ui/show.go` | the f panel: what a view is narrowed to |
@@ -351,9 +373,10 @@ that look like a failed load.
 ## Tests
 
 `go test ./...` drives the whole model against a mock AWX API: connect, filter,
-launch, follow output, drill into inventory hosts, read project and inventory
-details, sync a project and an inventory's sources, cancel a job, plus a check
-that every view fits inside 80×24, 120×40 and 200×50 terminals.
+launch, follow output, drill into inventory hosts, read project, inventory and
+schedule details, sync a project and an inventory's sources, toggle a
+schedule's enabled flag, cancel a job, plus a check that every view fits
+inside 80×24, 120×40 and 200×50 terminals.
 
 Set `AWXTUI_SHOW=1` to print the rendered views while testing:
 
@@ -416,4 +439,6 @@ the first page and merging it, so the pages you scrolled through stay put.
 
 ## Not done yet
 
-- Workflow job templates, schedules and ad-hoc commands.
+- Workflow job templates and ad-hoc commands.
+- Creating, editing or deleting a schedule: the Schedules tab reads and
+  toggles, but building an rrule is not done.

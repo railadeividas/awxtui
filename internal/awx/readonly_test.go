@@ -43,6 +43,9 @@ func TestReadOnlyRefusesWrites(t *testing.T) {
 	if _, err := c.SyncInventory(ctx, 3); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("SyncInventory: expected ErrReadOnly, got %v", err)
 	}
+	if err := c.SetScheduleEnabled(ctx, 1, false); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("SetScheduleEnabled: expected ErrReadOnly, got %v", err)
+	}
 	if len(methods) > 0 {
 		t.Errorf("read-only client still sent requests: %v", methods)
 	}

@@ -205,6 +205,21 @@ func stamp(t *time.Time) string {
 	return rowStyle.Render(rel) + dimStyle.Render("  "+local.Format("2006-01-02 15:04"))
 }
 
+// dueStamp is stamp for a timestamp still to come, such as a schedule's next
+// run: the relative half reads "in 2h" rather than claiming it already
+// happened.
+func dueStamp(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	local := t.Local()
+	rel := until(*t)
+	if rel == t.Format("2006-01-02") {
+		return rowStyle.Render(local.Format("2006-01-02 15:04"))
+	}
+	return rowStyle.Render(rel) + dimStyle.Render("  "+local.Format("2006-01-02 15:04"))
+}
+
 func seconds(n int) string {
 	if n == 0 {
 		return "none"

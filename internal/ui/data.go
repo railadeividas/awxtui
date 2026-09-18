@@ -45,6 +45,18 @@ type (
 		pageMeta
 		items []awx.Project
 	}
+	schedulesMsg struct {
+		pageMeta
+		items []awx.Schedule
+	}
+	// scheduleToggledMsg reports the outcome of a schedule enabled/disabled
+	// PATCH, carrying the value that was requested rather than re-fetching it.
+	scheduleToggledMsg struct {
+		id      int
+		enabled bool
+		err     error
+		gen     int
+	}
 	hostsMsg struct {
 		pageMeta
 		inventory   string
@@ -200,6 +212,17 @@ func (m *Model) fetch(t tab, pageURL, search string, cont bool) tea.Cmd {
 			meta.next, meta.count = p.Next, p.Count
 			return projectsMsg{pageMeta: meta, items: p.Results}
 		})
+	case tabSchedules:
+		return m.request(func() tea.Msg {
+			ctx, cancel := cmdCtx()
+			defer cancel()
+			p, err := c.Schedules(ctx, pageURL, search)
+			if err != nil {
+				return errMsg{err: err, gen: gen, tab: tabSchedules}
+			}
+			meta.next, meta.count = p.Next, p.Count
+			return schedulesMsg{pageMeta: meta, items: p.Results}
+		})
 	}
 	return nil
 }
@@ -261,6 +284,12 @@ func (m Model) pinnedCmd(t tab, meta pageMeta) tea.Cmd {
 				return errMsg{err: err, gen: gen, tab: tabInventories}
 			}
 			return inventoriesMsg{pageMeta: meta, items: inPinnedOrder(ids, found, inventoryID)}
+		case tabSchedules:
+			found, err := c.SchedulesByID(ctx, ids)
+			if err != nil {
+				return errMsg{err: err, gen: gen, tab: tabSchedules}
+			}
+			return schedulesMsg{pageMeta: meta, items: inPinnedOrder(ids, found, scheduleID)}
 		default:
 			found, err := c.ProjectsByID(ctx, ids)
 			if err != nil {
@@ -449,6 +478,20 @@ func (m *Model) syncInventory(inv awx.Inventory) tea.Cmd {
 	})
 }
 
+// toggleScheduleEnabled flips a schedule's enabled flag.
+func (m *Model) toggleScheduleEnabled(s awx.Schedule) tea.Cmd {
+	c, gen := m.client, m.gen
+	enabled := !s.Enabled
+	return m.request(func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		if err := c.SetScheduleEnabled(ctx, s.ID, enabled); err != nil {
+			return scheduleToggledMsg{id: s.ID, enabled: s.Enabled, err: fmt.Errorf("toggle schedule %s: %w", s.Name, err), gen: gen}
+		}
+		return scheduleToggledMsg{id: s.ID, enabled: enabled, gen: gen}
+	})
+}
+
 func tick(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
@@ -601,6 +644,58 @@ func (m Model) projectRows(items []awx.Project) []row {
 	return rows
 }
 
+func (m Model) scheduleRows(items []awx.Schedule) []row {
+	rows := make([]row, 0, len(items))
+	for _, s := range items {
+		pinned := ""
+		if m.pinned(tabSchedules, s.ID) {
+			pinned = "pinned"
+		}
+		kind := scheduleKindLabel(s.SummaryFields.UnifiedJobTemplate.UnifiedJobType)
+		next := dimStyle.Render("—")
+		if s.NextRun != nil {
+			next = dimStyle.Render(until(*s.NextRun))
+		}
+		enabled := okStyle.Render("enabled")
+		if !s.Enabled {
+			enabled = dimStyle.Render("disabled")
+		}
+		rows = append(rows, row{
+			id: s.ID,
+			cells: []string{
+				m.pinMark(tabSchedules, s.ID, s.Name),
+				dimStyle.Render(kind),
+				dimStyle.Render(s.SummaryFields.UnifiedJobTemplate.Name),
+				next,
+				enabled,
+			},
+			search: strings.ToLower(s.Name + " " + kind + " " +
+				s.SummaryFields.UnifiedJobTemplate.Name + " " + pinned),
+		})
+	}
+	return rows
+}
+
+// scheduleKindLabel shortens AWX's unified_job_type into what fits a column,
+// so a system-job schedule (cleanup, activity stream) reads apart from one
+// backing an actual playbook.
+func scheduleKindLabel(unifiedJobType string) string {
+	switch unifiedJobType {
+	case "job":
+		return "template"
+	case "project_update":
+		return "project"
+	case "inventory_update":
+		return "inventory"
+	case "system_job":
+		return "system"
+	case "workflow_job":
+		return "workflow"
+	default:
+		return unifiedJobType
+	}
+}
+
 func hostRows(items []awx.Host) []row {
 	rows := make([]row, 0, len(items))
 	for _, h := range items {
@@ -624,7 +719,9 @@ func hostRows(items []awx.Host) []row {
 	return rows
 }
 
-// ago formats a timestamp as a short relative age.
+// ago formats a timestamp as a short relative age. It assumes a past
+// timestamp: time.Since on a future one comes back negative, which every
+// branch here would read as "just now".
 func ago(t time.Time) string {
 	d := time.Since(t)
 	switch {
@@ -636,6 +733,24 @@ func ago(t time.Time) string {
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	case d < 30*24*time.Hour:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.Format("2006-01-02")
+	}
+}
+
+// until formats a timestamp still to come as a short relative time, the
+// mirror of ago for a schedule's next run.
+func until(t time.Time) string {
+	d := time.Until(t)
+	switch {
+	case d < time.Minute:
+		return "due now"
+	case d < time.Hour:
+		return fmt.Sprintf("in %dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("in %dh", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("in %dd", int(d.Hours()/24))
 	default:
 		return t.Format("2006-01-02")
 	}

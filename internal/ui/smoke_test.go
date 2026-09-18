@@ -430,6 +430,34 @@ func mockAWX(t *testing.T) *mock {
 		}})...))
 	})
 
+	mux.HandleFunc("/api/v2/schedules/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, page(filtered(r, []any{map[string]any{
+			"id": 7, "name": "nightly backup", "description": "Nightly infra backup run",
+			"rrule":   "DTSTART:20260101T020000Z RRULE:FREQ=DAILY;INTERVAL=1",
+			"enabled": true, "next_run": now.Add(10 * time.Hour), "timezone": "UTC",
+			"unified_job_template": 1,
+			"created":              now.Add(-720 * time.Hour), "modified": now.Add(-24 * time.Hour),
+			"summary_fields": map[string]any{
+				"unified_job_template": map[string]any{"id": 1, "name": "Deploy fleet", "unified_job_type": "job"},
+			},
+		}, map[string]any{
+			"id": 8, "name": "Cleanup Job Schedule", "description": "Automatically Generated Schedule",
+			"rrule":   "DTSTART:20260101T020000Z RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=SU",
+			"enabled": false, "next_run": nil, "timezone": "UTC",
+			"unified_job_template": 2,
+			"created":              now.Add(-720 * time.Hour), "modified": now.Add(-720 * time.Hour),
+			"summary_fields": map[string]any{
+				"unified_job_template": map[string]any{"id": 2, "name": "Cleanup Job Details", "unified_job_type": "system_job"},
+			},
+		}})...))
+	})
+	mux.HandleFunc("/api/v2/schedules/7/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, map[string]any{"id": 7, "enabled": true})
+	})
+	mux.HandleFunc("/api/v2/schedules/8/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, map[string]any{"id": 8, "enabled": false})
+	})
+
 	// ---- syncing ----
 	//
 	// A project update and an inventory sync are separate collections from
@@ -846,7 +874,7 @@ func TestEveryViewRendersWithinTerminalBounds(t *testing.T) {
 		m := New(awx.New(srv.URL, "test-token", false))
 		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = step(t, m, m.connect())
-		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G"} {
+		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc"} {
 			m = step(t, m, key(k))
 			out := m.View()
 			for i, line := range strings.Split(out, "\n") {

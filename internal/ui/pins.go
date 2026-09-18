@@ -25,6 +25,8 @@ func pinGroup(t tab) string {
 		return state.GroupInventorys
 	case tabProjects:
 		return state.GroupProjects
+	case tabSchedules:
+		return state.GroupSchedules
 	default:
 		return state.GroupTemplates
 	}
@@ -86,6 +88,8 @@ func (m *Model) rebuild(t tab) {
 		m.rows[t] = m.inventoryRows(m.inventories)
 	case tabProjects:
 		m.rows[t] = m.projectRows(m.projects)
+	case tabSchedules:
+		m.rows[t] = m.scheduleRows(m.schedules)
 	}
 }
 
@@ -114,6 +118,10 @@ func (m *Model) togglePinSelected() tea.Cmd {
 	case tabProjects:
 		if p, ok := m.selectedProject(); ok {
 			name = p.Name
+		}
+	case tabSchedules:
+		if s, ok := m.selectedSchedule(); ok {
+			name = s.Name
 		}
 	}
 	return m.togglePin(m.active, r.id, name, kind)
@@ -174,3 +182,4 @@ func jobID(j awx.Job) int              { return j.ID }
 func templateID(t awx.JobTemplate) int { return t.ID }
 func inventoryID(i awx.Inventory) int  { return i.ID }
 func projectID(p awx.Project) int      { return p.ID }
+func scheduleID(s awx.Schedule) int    { return s.ID }

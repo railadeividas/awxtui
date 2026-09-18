@@ -51,6 +51,7 @@ var tabColumns = map[tab][]col{
 	tabJobs:        {{title: "id", width: 10}, {title: "name", width: 0}, {title: "status", width: 13}, {title: "elapsed", width: 9}, {title: "started", width: 11}, {title: "by", width: 14}},
 	tabInventories: {{title: "name", width: 0}, {title: "organization", width: 22}, {title: "hosts", width: 7}, {title: "groups", width: 7}, {title: "health", width: 14}, {title: "sources", width: 9}},
 	tabProjects:    {{title: "name", width: 0}, {title: "scm", width: 10}, {title: "branch", width: 18}, {title: "status", width: 14}, {title: "updated", width: 11}},
+	tabSchedules:   {{title: "name", width: 0}, {title: "type", width: 10}, {title: "runs", width: 22}, {title: "next run", width: 14}, {title: "state", width: 9}},
 }
 
 var hostColumns = []col{{title: "host", width: 0}, {title: "state", width: 10}, {title: "description", width: 32}}
@@ -82,6 +83,8 @@ func (m Model) View() string {
 		b.WriteString(m.pane(m.projectModal()))
 	case modeInventory:
 		b.WriteString(m.pane(m.inventoryModal()))
+	case modeSchedule:
+		b.WriteString(m.pane(m.scheduleModal()))
 	case modeJob:
 		b.WriteString(m.pane(m.jobModal()))
 	case modeShow:
@@ -587,6 +590,12 @@ func (m Model) statusView() string {
 		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
 	case modeInventory:
 		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"h", "hosts"}, {"s", "sync all"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
+	case modeSchedule:
+		toggle := "disable"
+		if !m.schedule.schedule.Enabled {
+			toggle = "enable"
+		}
+		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"t", toggle}, {"esc", "back"}, {"?", "help"}})
 	case modeJob:
 		pin := m.jobPinLabel()
 		keys = append(plainKeys([][2]string{{"↑↓", "scroll"}, {"enter", "output"}}),
@@ -625,7 +634,7 @@ func (m Model) listKeys() []legend {
 	switch m.active {
 	case tabJobs:
 		action = "output"
-	case tabInventories, tabProjects:
+	case tabInventories, tabProjects, tabSchedules:
 		action = "details"
 	}
 	keys := []legend{{key: "↑↓", desc: "move"}, {key: "enter", desc: action}}
@@ -634,6 +643,13 @@ func (m Model) listKeys() []legend {
 	}
 	if m.active == tabJobs {
 		keys = append(keys, legend{key: "d", desc: "details"})
+	}
+	if m.active == tabSchedules {
+		toggle := "disable"
+		if s, ok := m.selectedSchedule(); ok && !s.Enabled {
+			toggle = "enable"
+		}
+		keys = append(keys, legend{key: "t", desc: toggle})
 	}
 	pin := m.pinLabel()
 	keys = append(keys,
