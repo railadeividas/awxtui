@@ -79,7 +79,7 @@ func setShow(t *testing.T, m Model, field, value string) Model {
 			for m.panel.optCursor != oi {
 				m = step(t, m, key("right"))
 			}
-			if slices.Contains(m.panel.draft.status, o.value) != want[o.value] {
+			if slices.Contains(*m.panel.draft.multi(field), o.value) != want[o.value] {
 				m = step(t, m, key(" "))
 			}
 		}
@@ -210,7 +210,7 @@ func TestShowFilterNarrowsJobsByKind(t *testing.T) {
 	if got := rowIDs(m, tabJobs); len(got) != 1 || got[0] != 12 {
 		t.Fatalf("project updates = %v, want just #12 (err %v)", got, m.err)
 	}
-	if q := srv.unified(); !strings.Contains(q[len(q)-1], "type=project_update") {
+	if q := srv.unified(); !strings.Contains(q[len(q)-1], "type__in=project_update") {
 		t.Errorf("the kind filter did not reach AWX: %q", q[len(q)-1])
 	}
 	if label := m.countLabel(tabJobs); !strings.Contains(label, "project updates") {
@@ -251,6 +251,29 @@ func TestShowFilterCanSelectMultipleStatuses(t *testing.T) {
 		if !want[id] {
 			t.Errorf("row #%d is not running", id)
 		}
+	}
+}
+
+// Kind is a set too, for the same reason status is: wanting jobs and project
+// updates together, but not inventory syncs, is one narrowing, not two.
+func TestShowFilterCanSelectMultipleKinds(t *testing.T) {
+	srv := mockAWX(t)
+	m := onTab(t, srv, tabJobs)
+
+	m = setShow(t, m, "kind", "job,project_update")
+	got := rowIDs(m, tabJobs)
+	want := map[int]bool{43: true, 42: true, 40: true, 12: true}
+	if len(got) != len(want) {
+		t.Fatalf("job+project_update = %v, want the 4 runs of either kind", got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("row #%d is neither a job nor a project update", id)
+		}
+	}
+	if q := srv.unified(); !strings.Contains(q[len(q)-1], "type__in=job%2Cproject_update") &&
+		!strings.Contains(q[len(q)-1], "type__in=job,project_update") {
+		t.Errorf("the multi-kind filter did not reach AWX as one comma list: %q", q[len(q)-1])
 	}
 }
 

@@ -27,9 +27,9 @@ type showFilter struct {
 	// which match; empty is any. A run is usually worth looking at because it
 	// failed or is still running, and those are two different statuses.
 	status []string
-	// kind is an AWX record type (job, project_update, inventory_update);
-	// empty is any.
-	kind string
+	// kind is a set of AWX record types (job, project_update,
+	// inventory_update), any of which match; empty is any.
+	kind []string
 	// startedBy is a fragment of a username, matched case-insensitively.
 	// "mine" only ever means the connected user; a deploy bot or a colleague
 	// needs their own name typed in.
@@ -40,8 +40,8 @@ type showFilter struct {
 // not comparable with == once it holds a slice.
 func (f showFilter) equal(g showFilter) bool {
 	return f.mine == g.mine && f.pinnedOnly == g.pinnedOnly &&
-		f.kind == g.kind && f.startedBy == g.startedBy &&
-		slices.Equal(f.status, g.status)
+		f.startedBy == g.startedBy &&
+		slices.Equal(f.status, g.status) && slices.Equal(f.kind, g.kind)
 }
 
 func (f showFilter) active() bool { return !f.equal(showFilter{}) }
@@ -62,8 +62,12 @@ func (f showFilter) summary() string {
 	if len(f.status) > 0 {
 		parts = append(parts, strings.Join(f.status, "/"))
 	}
-	if f.kind != "" {
-		parts = append(parts, kindLabels[f.kind])
+	if len(f.kind) > 0 {
+		labels := make([]string, len(f.kind))
+		for i, k := range f.kind {
+			labels[i] = kindLabels[k]
+		}
+		parts = append(parts, strings.Join(labels, "/"))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -113,9 +117,11 @@ var (
 	statusChoice = choice{field: "status", title: "Status", kind: kindMulti, options: []option{
 		{"running", "running"}, {"failed", "failed"}, {"successful", "successful"},
 	}}
-	kindChoice = choice{field: "kind", title: "Kind", kind: kindCycle, options: []option{
-		{"anything", ""}, {"jobs", "job"},
-		{"project updates", "project_update"}, {"inventory syncs", "inventory_update"},
+	// kindChoice offers no "anything" option, the same reasoning as status:
+	// an empty selection already means any, and it is common to want jobs
+	// and project updates together while excluding inventory syncs.
+	kindChoice = choice{field: "kind", title: "Kind", kind: kindMulti, options: []option{
+		{"jobs", "job"}, {"project updates", "project_update"}, {"inventory syncs", "inventory_update"},
 	}}
 	pinnedChoice = choice{field: "pinned", title: "Pinned", kind: kindCycle, options: []option{
 		{"everything", ""}, {"pinned only", "yes"},
@@ -157,7 +163,7 @@ func (f showFilter) get(field string) string {
 	case "status":
 		return strings.Join(f.status, ",")
 	case "kind":
-		return f.kind
+		return strings.Join(f.kind, ",")
 	case "startedBy":
 		return f.startedBy
 	}
@@ -176,16 +182,31 @@ func (f *showFilter) set(field, value string) {
 			f.status = strings.Split(value, ",")
 		}
 	case "kind":
-		f.kind = value
+		f.kind = nil
+		if value != "" {
+			f.kind = strings.Split(value, ",")
+		}
 	case "startedBy":
 		f.startedBy = value
 	}
 }
 
-// toggleStatus adds or removes one status from the set, keeping it sorted so
-// two filters holding the same statuses always compare equal regardless of
+// multi returns a pointer to the set behind a kindMulti field, so toggling
+// and reading it can be generic over which row (status, kind…) it is.
+func (f *showFilter) multi(field string) *[]string {
+	switch field {
+	case "status":
+		return &f.status
+	case "kind":
+		return &f.kind
+	}
+	return nil
+}
+
+// toggleMember adds or removes one value from the set, keeping it sorted so
+// two filters holding the same members always compare equal regardless of
 // the order they were toggled in.
-func toggleStatus(cur []string, v string) []string {
+func toggleMember(cur []string, v string) []string {
 	if i := slices.Index(cur, v); i >= 0 {
 		return slices.Delete(slices.Clone(cur), i, i+1)
 	}
@@ -400,9 +421,11 @@ func (m Model) handleShowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		// Only a multi row toggles: on a cycle row, space advancing one step
 		// looked identical to "toggle" for a two-option row (Pinned) but not
-		// for Kind's four, where it just looked like right with an extra key.
+		// for a row with more choices, where it just looked like right with
+		// an extra key.
 		if cur.kind == kindMulti {
-			m.panel.draft.status = toggleStatus(m.panel.draft.status, cur.options[m.panel.optCursor].value)
+			set := m.panel.draft.multi(cur.field)
+			*set = toggleMember(*set, cur.options[m.panel.optCursor].value)
 		}
 		return m, nil
 	case "backspace", "c":
@@ -462,7 +485,7 @@ func (m Model) showModal() string {
 		for oi, o := range c.options {
 			switch c.kind {
 			case kindMulti:
-				selected := slices.Contains(m.panel.draft.status, o.value)
+				selected := slices.Contains(*m.panel.draft.multi(c.field), o.value)
 				focused := i == m.panel.cursor && oi == m.panel.optCursor
 				label := " " + o.label + " "
 				if selected {

@@ -287,7 +287,7 @@ func (m Model) pinnedCmd(t tab, meta pageMeta) tea.Cmd {
 				if len(keep.status) > 0 && !slices.Contains(keep.status, j.Status) {
 					continue
 				}
-				if keep.kind != "" && j.Type != keep.kind {
+				if len(keep.kind) > 0 && !slices.Contains(keep.kind, j.Type) {
 					continue
 				}
 				if keep.mine && j.SummaryFields.CreatedBy.Username != me {

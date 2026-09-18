@@ -97,17 +97,25 @@ func mockAWX(t *testing.T) *mock {
 			want := q.Get(param)
 			return want == "" || of(rec) == want
 		}
+		// matchIn mirrors AWX's __in lookup: a comma list where any member
+		// matching is enough. Used for id__in, status__in and type__in alike.
+		matchIn := func(param, got string) bool {
+			list := q.Get(param)
+			if list == "" {
+				return true
+			}
+			for _, want := range strings.Split(list, ",") {
+				if want == got {
+					return true
+				}
+			}
+			return false
+		}
 		var kept []any
 		for _, it := range hits {
 			rec, _ := it.(map[string]any)
-			if ids := q.Get("id__in"); ids != "" {
-				found := false
-				for _, id := range strings.Split(ids, ",") {
-					found = found || id == fmt.Sprint(rec["id"])
-				}
-				if !found {
-					continue
-				}
+			if !matchIn("id__in", fmt.Sprint(rec["id"])) {
+				continue
 			}
 			createdBy := func(rec map[string]any) string {
 				sf, _ := rec["summary_fields"].(map[string]any)
@@ -119,18 +127,12 @@ func mockAWX(t *testing.T) *mock {
 				by, _ := sf["created_by"].(map[string]any)
 				return fmt.Sprint(by["username"])
 			}
-			if !match(rec, "created_by", createdBy) ||
-				!match(rec, "type", func(rec map[string]any) string { return fmt.Sprint(rec["type"]) }) {
+			if !match(rec, "created_by", createdBy) {
 				continue
 			}
-			if statuses := q.Get("status__in"); statuses != "" {
-				found := false
-				for _, s := range strings.Split(statuses, ",") {
-					found = found || s == fmt.Sprint(rec["status"])
-				}
-				if !found {
-					continue
-				}
+			if !matchIn("status__in", fmt.Sprint(rec["status"])) ||
+				!matchIn("type__in", fmt.Sprint(rec["type"])) {
+				continue
 			}
 			if frag := strings.ToLower(q.Get("created_by__username__icontains")); frag != "" {
 				if !strings.Contains(strings.ToLower(createdByUsername(rec)), frag) {

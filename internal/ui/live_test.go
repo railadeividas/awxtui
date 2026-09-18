@@ -511,7 +511,7 @@ func TestLiveWorkflowJobNodes(t *testing.T) {
 
 	ctx, cancel := cmdCtx()
 	defer cancel()
-	page, err := client.UnifiedJobs(ctx, "", "", awx.JobFilter{Type: "workflow_job"})
+	page, err := client.UnifiedJobs(ctx, "", "", awx.JobFilter{Type: []string{"workflow_job"}})
 	if err != nil {
 		t.Fatalf("listing workflow jobs failed: %v", err)
 	}

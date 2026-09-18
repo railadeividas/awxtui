@@ -253,24 +253,27 @@ narrowed by:
 
 | Tab | Choices |
 | --- | --- |
-| Jobs | started by anyone / me, or a typed username · status: any of running / failed / successful, several at once · kind anything / jobs / project updates / inventory syncs · everything / pinned only |
+| Jobs | started by anyone / me, or a typed username · status: any of running / failed / successful, several at once · kind: any of jobs / project updates / inventory syncs, several at once · everything / pinned only |
 | Templates, Inventories, Projects | everything / pinned only |
 
-`↑↓` picks a row. Status is a set, not one choice — a run worth a look is
-usually failed or still running, both at once — so `←→` moves a highlight
-across running/failed/successful and `space` toggles the highlighted one in or
-out; the rest of the rows are still `←→` or `space` to cycle. "Started by" is
-one row that does both jobs: empty, `←→` or `space` toggles anyone/me exactly
-like any other row, but the moment a character is typed it becomes a
-username fragment instead (a deploy bot, a colleague), matched
-case-insensitively — "mine" can only ever mean the connected user, so finding
-anyone else means typing their name. Backspacing that text back to empty
-returns the row to the anyone/me toggle. `c` clears everything (typed off the
-"Started by" row, where a letter is just as likely to be someone's username);
-backspace does the same, and also doubles as the clear-all once "Started by"
-is empty. `enter` applies and `esc` leaves without changing anything. The
-active narrowing shows in the count line — `mine · failed/running · 46` — so
-a short list is never mistaken for a small instance.
+`↑↓` picks a row. Status and Kind are sets, not one choice each — a run
+worth a look is usually failed or still running, both at once, and wanting
+jobs and project updates together while excluding inventory syncs is one
+narrowing, not two — so on those rows `←→` moves a highlight across the
+options and `space` toggles the highlighted one in or out. On every other
+row `←→` cycles through its options; `space` does nothing there, so it
+means one thing everywhere it does something. "Started by" is one row that
+does two jobs: empty, `←→` toggles anyone/me exactly like Pinned does, but
+the moment a character is typed it becomes a username fragment instead (a
+deploy bot, a colleague), matched case-insensitively — "mine" can only ever
+mean the connected user, so finding anyone else means typing their name.
+Backspacing that text back to empty returns the row to the anyone/me toggle.
+`c` clears everything (typed off the "Started by" row, where a letter is
+just as likely to be someone's username); backspace does the same, and also
+doubles as the clear-all once "Started by" is empty. `enter` applies and
+`esc` leaves without changing anything. The active narrowing shows in the
+count line — `mine · failed/running · jobs/project updates · 46` — so a
+short list is never mistaken for a small instance.
 
 **A narrowed view is remembered**, in the same file as the pins and keyed the
 same way, per instance and per tab: leave the Jobs tab showing your own failed
@@ -282,11 +285,11 @@ saved as plain names, so adding one to the panel later cannot strand what is
 already saved.
 
 Every choice is sent to AWX, not applied to the rows that happen to be
-loaded: `created_by`, `created_by__username__icontains`, `status__in` (a
-comma list, for several statuses at once) and `type` as query parameters, and
-a pinned-only view as one `?id__in=` request. Lists are paged, so filtering
-what is on screen would hide everything that is not. `/` still searches,
-inside whatever the view is narrowed to.
+loaded: `created_by`, `created_by__username__icontains`, `status__in` and
+`type__in` (comma lists, for several statuses or kinds at once) as query
+parameters, and a pinned-only view as one `?id__in=` request. Lists are
+paged, so filtering what is on screen would hide everything that is not.
+`/` still searches, inside whatever the view is narrowed to.
 
 The key line marks what is already in force: `p` reads **unpin** on a pinned
 row, `f` **show** on a narrowed list, and in the output view `f` **follow**

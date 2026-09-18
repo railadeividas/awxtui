@@ -620,8 +620,9 @@ type JobFilter struct {
 	// Status is a set of AWX job statuses (running, failed, successful…),
 	// any of which match; empty is any.
 	Status []string
-	// Type is an AWX record type: job, project_update, inventory_update.
-	Type string
+	// Type is a set of AWX record types (job, project_update,
+	// inventory_update), any of which match; empty is any.
+	Type []string
 }
 
 func (f JobFilter) query() string {
@@ -635,8 +636,8 @@ func (f JobFilter) query() string {
 	if len(f.Status) > 0 {
 		q += "&status__in=" + url.QueryEscape(strings.Join(f.Status, ","))
 	}
-	if f.Type != "" {
-		q += "&type=" + url.QueryEscape(f.Type)
+	if len(f.Type) > 0 {
+		q += "&type__in=" + url.QueryEscape(strings.Join(f.Type, ","))
 	}
 	return q
 }
