@@ -500,13 +500,29 @@ func (m Model) renderField(fl *formField, focused bool, labelW, inner int) strin
 		}
 
 	default:
+		// A limit built from many selected hosts/groups (see the inventory
+		// details' own live limit) can be far longer than any line here has
+		// room for. inner-6 clears modalStyle's own border and padding, the
+		// same overhead the inventory modal accounts for; prefix + label +
+		// two gaps is the fixed overhead before the value even starts (see
+		// the concatenation below). Giving the textinput exactly what's
+		// left, rather than the guess it was built with, keeps its own
+		// horizontal scroll from overflowing the line — and bounds the
+		// unfocused, un-scrolled preview the same way.
+		avail := max(inner-6-labelW-5, 10)
 		if focused {
+			fl.input.Width = avail
+			// Width alone doesn't reflow the field's horizontal scroll
+			// window — bubbles only recomputes that when the cursor moves.
+			// Re-setting it to itself forces that recompute against the
+			// width just set, rather than whatever it was built with.
+			fl.input.SetCursor(fl.input.Position())
 			value = "  " + fl.input.View()
 		} else if v := fl.input.Value(); v != "" {
 			if fl.kind == fPassword {
 				v = strings.Repeat("•", min(len(v), 12))
 			}
-			value = rowStyle.Render("  " + v)
+			value = rowStyle.Render("  " + cell(v, avail))
 		} else {
 			value = dimStyle.Render("  " + firstNonEmpty(fl.input.Placeholder, "(empty)"))
 		}

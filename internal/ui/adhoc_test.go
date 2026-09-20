@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -191,5 +193,81 @@ func TestAdHocLaunchReadOnly(t *testing.T) {
 	}
 	if srv.launchCount() != 0 {
 		t.Fatalf("read-only client still launched: %v", srv.lastLaunch())
+	}
+}
+
+// A limit built from many selected hosts is easily wider than the form. The
+// bug this guards: newAdHocForm prefills the field's textinput via SetValue
+// *before* Width is set (see newInput), so bubbles computes its horizontal
+// scroll window as if the field were unbounded — the value then renders
+// wrapped across dozens of lines instead of scrolling within one, pushing
+// every field below it off screen. Typing the value in character by
+// character wouldn't reproduce this: each keystroke re-triggers bubbles'
+// own recompute with Width already set correctly by then. Only a value
+// that arrives prefilled — exactly how a members-view selection reaches
+// this field — hits the bug, so that's what this test drives.
+func TestLongLimitFromSelectionStaysOneLine(t *testing.T) {
+	srv := mockAWX(t)
+	m := New(awx.New(srv.URL, "test-token", false))
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = step(t, m, m.connect())
+	m = step(t, m, key("3"))
+	m = rowAt(t, m, "production")
+	m = step(t, m, key("enter"))
+
+	// production's mock only has 2 hosts; inject enough to force real
+	// wrapping if the field is left unbounded.
+	hosts := make([]awx.Host, 60)
+	for i := range hosts {
+		hosts[i] = awx.Host{ID: 5000 + i, Name: fmt.Sprintf("host-%02d.example.com", i), Enabled: true}
+	}
+	rows, names := memberRows(memberHosts, hosts, nil)
+	m.inventory.hosts.rows, m.inventory.hosts.names = rows, names
+	m.inventory.hosts.count = len(hosts)
+
+	m = step(t, m, key("h")) // jump to the first host
+	for range hosts {
+		m = step(t, m, key(" "))
+		m = step(t, m, key("down"))
+	}
+	if len(m.limitSel.names) != len(hosts) {
+		t.Fatalf("expected all %d hosts selected, got %d", len(hosts), len(m.limitSel.names))
+	}
+
+	m = step(t, m, key("a")) // open ad hoc — limit is prefilled from the selection
+	if m.mode != modeLaunch {
+		t.Fatalf("expected the ad hoc launch form, got mode %v (err %v)", m.mode, m.err)
+	}
+
+	// Limit and Verbosity must land on adjacent lines: a wrapped Limit
+	// leaves the word "Limit" only on its first physical line, so counting
+	// lines that mention it can't tell a one-line field from a many-line
+	// one — but a wrapped Limit pushes Verbosity dozens of lines further
+	// down, which this catches directly.
+	linesApart := func(m Model) int {
+		t.Helper()
+		lines := strings.Split(stripANSI(m.View()), "\n")
+		limitAt, verbosityAt := -1, -1
+		for i, l := range lines {
+			if strings.Contains(l, "Limit") {
+				limitAt = i
+			}
+			if strings.Contains(l, "Verbosity") {
+				verbosityAt = i
+			}
+		}
+		if limitAt == -1 || verbosityAt == -1 {
+			t.Fatalf("Limit or Verbosity missing from the view entirely:\n%s", strings.Join(lines, "\n"))
+		}
+		return verbosityAt - limitAt
+	}
+
+	if got := linesApart(m); got != 1 {
+		t.Fatalf("Limit and Verbosity are %d lines apart unfocused, want 1 (Limit must not wrap):\n%s", got, stripANSI(m.View()))
+	}
+
+	m = focusField(t, m, "limit")
+	if got := linesApart(m); got != 1 {
+		t.Fatalf("Limit and Verbosity are %d lines apart while focused, want 1 (Limit must not wrap):\n%s", got, stripANSI(m.View()))
 	}
 }

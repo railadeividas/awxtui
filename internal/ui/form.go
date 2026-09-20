@@ -171,10 +171,17 @@ type form struct {
 func newInput(value, placeholder string, width int) textinput.Model {
 	ti := textinput.New()
 	ti.Prompt = ""
+	// Width has to be set before SetValue: bubbles computes its horizontal
+	// scroll window (offset/offsetRight) once, inside SetValue, using
+	// whatever Width already is — at zero, it treats the field as unbounded
+	// and shows the whole value. Set afterward, that stale window sticks
+	// around and View() keeps rendering the untruncated value regardless,
+	// which is how a limit built from a few dozen selected hosts turned
+	// into a many-line wrapped block instead of a scrolling one-liner.
+	ti.Width = width
 	ti.SetValue(value)
 	ti.Placeholder = placeholder
 	ti.TextStyle = inputStyle
-	ti.Width = width
 	// A static cursor keeps the focused field obvious without repainting the
 	// screen twice a second, which matters over SSH.
 	ti.Cursor.SetMode(cursor.CursorStatic)

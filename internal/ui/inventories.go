@@ -137,8 +137,17 @@ func (m *Model) moveInventoryCursor(delta int) tea.Cmd {
 // stays visible, the same way clampInventoryOffset keeps a plain scroll in
 // range.
 func (m *Model) syncInventoryOffset() {
-	_, body, cursorLine := m.inventoryBody(m.inventoryWidth())
-	m.inventory.offset = clampOffset(cursorLine, m.inventory.offset, m.inventoryBodyWindow(), len(body))
+	_, body, cursorLine, sections := m.inventoryBody(m.inventoryWidth())
+	window := m.inventoryBodyWindow()
+	off := clampOffset(cursorLine, m.inventory.offset, window, len(body))
+	// A pinned section header (see stickyHeader) shrinks how many actual
+	// rows fit below it; re-clamp against that smaller window; or the
+	// cursor can land in the space the pinned header now occupies and
+	// scroll off screen while inventoryModal still thinks it is visible.
+	if sticky := stickyHeader(sections, off); len(sticky) > 0 {
+		off = clampOffset(cursorLine, off, max(window-len(sticky), 1), len(body))
+	}
+	m.inventory.offset = off
 }
 
 func (m Model) handleInventoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -237,14 +246,14 @@ func (m Model) inventoryWindow() int {
 // scrolled, so it stays on screen no matter how far down the lists go) has
 // taken its share.
 func (m Model) inventoryBodyWindow() int {
-	header, _, _ := m.inventoryBody(m.inventoryWidth())
+	header, _, _, _ := m.inventoryBody(m.inventoryWidth())
 	// +1 for the blank line inventoryModal always inserts between the
 	// header and the body.
 	return max(m.inventoryWindow()-len(header)-1, 3)
 }
 
 func (m Model) clampInventoryOffset(off int) int {
-	_, body, _ := m.inventoryBody(m.inventoryWidth())
+	_, body, _, _ := m.inventoryBody(m.inventoryWidth())
 	return clamp(off, 0, len(body)-m.inventoryBodyWindow())
 }
 
@@ -259,10 +268,15 @@ func (m Model) inventoryWidth() int {
 func (m Model) inventoryModal() string {
 	inv := m.inventory.inventory
 	width := m.inventoryWidth()
-	header, body, _ := m.inventoryBody(width)
+	header, body, _, sections := m.inventoryBody(width)
 	window := m.inventoryBodyWindow()
 	off := clamp(m.inventory.offset, 0, max(len(body)-window, 0))
-	end := min(off+window, len(body))
+
+	// A long scroll inside one table's rows can carry its own "N groups"
+	// count and column titles out of view; pin them back at the top of the
+	// visible body rather than let the list turn anonymous.
+	sticky := stickyHeader(sections, off)
+	end := min(off+max(window-len(sticky), 1), len(body))
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(fmt.Sprintf("Inventory #%d", inv.ID)) + "  " + rowStyle.Bold(true).Render(inv.Name))
@@ -274,6 +288,10 @@ func (m Model) inventoryModal() string {
 	if len(header) > 0 {
 		b.WriteString("\n\n")
 	}
+	if len(sticky) > 0 {
+		b.WriteString(strings.Join(sticky, "\n"))
+		b.WriteString("\n")
+	}
 	b.WriteString(strings.Join(body[off:end], "\n"))
 	return modalStyle.Width(width).Render(b.String())
 }
@@ -281,9 +299,10 @@ func (m Model) inventoryModal() string {
 // inventoryBody splits the modal's content into a header (organization,
 // limit, sources — short, and never scrolled) and a body (the groups and
 // hosts tables, which can run well past a screen and scroll on their own),
-// plus the line index within body the combined cursor currently sits on
-// (-1 if nothing is loaded to put it on).
-func (m Model) inventoryBody(width int) (header, body []string, cursorLine int) {
+// the line index within body the combined cursor currently sits on (-1 if
+// nothing is loaded to put it on), and each table's own section within body
+// so a scroll deep into one can keep its header pinned.
+func (m Model) inventoryBody(width int) (header, body []string, cursorLine int, sections []memberSection) {
 	inv := m.inventory.inventory
 	valueW := max(width-20, 20)
 	cursorLine = -1
@@ -308,7 +327,15 @@ func (m Model) inventoryBody(width int) (header, body []string, cursorLine int) 
 	}
 	field("organization", rowStyle.Render(inv.SummaryFields.Organization.Name))
 	if sel := m.limitSel; sel.inventoryID == inv.ID {
-		field("limit", rowStyle.Render(sel.limit())+dimStyle.Render("  (x to clear)"))
+		// A selection of even a couple dozen names, ':'-joined, is easily
+		// longer than the modal is wide — field()'s normal wrap would turn
+		// this one line into a screenful and push the sources and tables
+		// below it out of the fixed header's own space. Truncated to a
+		// single line plus a count, it stays exactly one line regardless of
+		// how many names are behind it.
+		suffix := fmt.Sprintf("  (%d selected · x to clear)", len(sel.names))
+		avail := max(valueW-len(suffix), 10)
+		lines = append(lines, cell(dimStyle.Render("limit"), 16)+cell(rowStyle.Render(sel.limit()), avail)+dimStyle.Render(suffix))
 	}
 	lines = append(lines, "")
 
@@ -330,7 +357,7 @@ func (m Model) inventoryBody(width int) (header, body []string, cursorLine int) 
 	// description wrap above; renderTable adds one more column of its own
 	// for the row-cursor marker it prepends.
 	tableWidth := width - 7
-	appendMembers := func(ml memberList, localCursor int) {
+	appendMembers := func(ml memberList, localCursor int) memberSection {
 		count := fmt.Sprintf("%d %s", len(ml.rows), ml.kind.noun())
 		if ml.count > len(ml.rows) {
 			count = fmt.Sprintf("%d of %d %s", len(ml.rows), ml.count, ml.kind.noun())
@@ -338,14 +365,15 @@ func (m Model) inventoryBody(width int) (header, body []string, cursorLine int) 
 		if len(ml.chosen) > 0 {
 			count = fmt.Sprintf("%d selected · %s", len(ml.chosen), count)
 		}
-		lines = append(lines, dimStyle.Render(count))
+		countLine := dimStyle.Render(count)
+		lines = append(lines, countLine)
 		if ml.loading {
 			lines = append(lines, dimStyle.Render("  fetching "+ml.kind.noun()+"…"))
-			return
+			return memberSection{header: []string{countLine}, rowStart: len(lines), rowEnd: len(lines)}
 		}
 		if len(ml.rows) == 0 {
 			lines = append(lines, dimStyle.Render("  none"))
-			return
+			return memberSection{header: []string{countLine}, rowStart: len(lines), rowEnd: len(lines)}
 		}
 		marked := make([]row, len(ml.rows))
 		for i, r := range ml.rows {
@@ -358,28 +386,59 @@ func (m Model) inventoryBody(width int) (header, body []string, cursorLine int) 
 			marked[i] = row{id: r.id, cells: cells, search: r.search}
 		}
 		table := strings.Split(renderTable(memberColumns(ml.kind), marked, localCursor, 0, tableWidth, len(marked)), "\n")
-		for i, l := range table {
-			// table[0] is the column header; a selected row i>0 is loaded
-			// row i-1, which renderTable highlights when i-1 == localCursor.
-			if localCursor >= 0 && i == localCursor+1 {
+		// table[0] is the column header — part of this section's sticky
+		// header, alongside the count line, so both survive a scroll deep
+		// into its rows.
+		lines = append(lines, table[0])
+		sec := memberSection{header: []string{countLine, table[0]}, rowStart: len(lines)}
+		for i, l := range table[1:] {
+			// a selected row i is loaded row i, which renderTable highlights
+			// when i == localCursor.
+			if localCursor >= 0 && i == localCursor {
 				cursorLine = len(lines)
 			}
 			lines = append(lines, l)
 		}
+		sec.rowEnd = len(lines)
+		return sec
 	}
 
 	groupsCursor := -1
 	if m.inventory.cursor < len(m.inventory.groups.rows) {
 		groupsCursor = m.inventory.cursor
 	}
-	appendMembers(m.inventory.groups, groupsCursor)
+	groupsSec := appendMembers(m.inventory.groups, groupsCursor)
 	lines = append(lines, "")
 
 	hostsCursor := -1
 	if idx := m.inventory.cursor - len(m.inventory.groups.rows); idx >= 0 && idx < len(m.inventory.hosts.rows) {
 		hostsCursor = idx
 	}
-	appendMembers(m.inventory.hosts, hostsCursor)
+	hostsSec := appendMembers(m.inventory.hosts, hostsCursor)
 
-	return header, lines, cursorLine
+	return header, lines, cursorLine, []memberSection{groupsSec, hostsSec}
+}
+
+// memberSection locates one groups/hosts table within the scrolling body:
+// its own small header (the "N groups"/"N hosts" count line plus the column
+// titles) and the row range that follows it. A section with 70+ rows scrolls
+// its own header out of view same as any other line would; stickyHeader
+// uses this to pin it back so the count and column names are never lost.
+type memberSection struct {
+	header   []string
+	rowStart int
+	rowEnd   int // exclusive
+}
+
+// stickyHeader returns a section's header if the body is scrolled to a point
+// inside that section's rows but past its own header — i.e. exactly when
+// that header would otherwise have scrolled out of view.
+func stickyHeader(sections []memberSection, off int) []string {
+	for _, sec := range sections {
+		headerStart := sec.rowStart - len(sec.header)
+		if off > headerStart && off < sec.rowEnd {
+			return sec.header
+		}
+	}
+	return nil
 }

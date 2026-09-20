@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/railadeividas/awxtui/internal/awx"
 )
 
 // The "health" column on the list is about host failures, not sync status —
@@ -97,6 +100,81 @@ func TestInventoryCursorMovesAcrossGroupsThenHosts(t *testing.T) {
 	m = step(t, m, key("h"))
 	if m.inventory.cursor != nGroups {
 		t.Fatalf("h should jump the cursor to the first host (index %d), got %d", nGroups, m.inventory.cursor)
+	}
+}
+
+// Scrolling deep into a long list must keep the cursor's row on screen even
+// once its table's own header has to be pinned back at the top — the pinned
+// header eats into the same window the cursor is clamped against, and a
+// stale clamp against the wrong (larger) window let the cursor scroll
+// behind it, invisible.
+func TestCursorStaysVisibleBehindAPinnedSectionHeader(t *testing.T) {
+	m, _ := openTab(t, "3")
+	m = rowAt(t, m, "production")
+	m = step(t, m, key("enter"))
+
+	// Give the inventory far more hosts than fit on screen, so scrolling
+	// through them pins the "N hosts" header the way 47 real hosts did.
+	hosts := make([]awx.Host, 60)
+	for i := range hosts {
+		hosts[i] = awx.Host{ID: 1000 + i, Name: fmt.Sprintf("host-%02d", i), Enabled: true}
+	}
+	rows, names := memberRows(memberHosts, hosts, nil)
+	m.inventory.hosts.rows, m.inventory.hosts.names = rows, names
+	m.inventory.hosts.count = len(hosts)
+
+	m = step(t, m, key("h")) // jump the cursor to the first host
+	for i := 0; i < 40; i++ {
+		m = step(t, m, key("down"))
+		want := m.inventory.hosts.names[m.inventory.cursor-len(m.inventory.groups.rows)]
+		view := stripANSI(m.View())
+		if !strings.Contains(view, want) {
+			t.Fatalf("after %d downs, cursor is on %q but it is not visible:\n%s", i+1, want, view)
+		}
+	}
+}
+
+// A limit built from many selected names is easily wider than the modal —
+// wrapping it, the way every other field wraps, would turn one line into a
+// screenful and push the sources and tables clean out of the header's fixed
+// space. It must stay a single line, however many names are behind it.
+func TestLimitLineStaysOneLineHoweverManyAreSelected(t *testing.T) {
+	m, _ := openTab(t, "3")
+	m = rowAt(t, m, "production")
+	m = step(t, m, key("enter"))
+
+	hosts := make([]awx.Host, 60)
+	for i := range hosts {
+		hosts[i] = awx.Host{ID: 1000 + i, Name: fmt.Sprintf("host-%02d", i), Enabled: true}
+	}
+	rows, names := memberRows(memberHosts, hosts, nil)
+	m.inventory.hosts.rows, m.inventory.hosts.names = rows, names
+	m.inventory.hosts.count = len(hosts)
+
+	m = step(t, m, key("h")) // jump to the first host
+	for i := 0; i < len(hosts); i++ {
+		m = step(t, m, key(" "))
+		m = step(t, m, key("down"))
+	}
+	if len(m.limitSel.names) != len(hosts) {
+		t.Fatalf("expected all %d hosts selected, got %d", len(hosts), len(m.limitSel.names))
+	}
+
+	header, _, _, _ := m.inventoryBody(m.inventoryWidth())
+	limitLines := 0
+	for _, l := range header {
+		if strings.Contains(stripANSI(l), "selected") {
+			limitLines++
+		}
+	}
+	if limitLines != 1 {
+		t.Fatalf("limit line count = %d, want exactly 1 — it must not wrap", limitLines)
+	}
+	// The sources section this pushed below it must still be reachable
+	// within the header budget the fields view assumes.
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "sources") {
+		t.Errorf("sources section got pushed out of view by a wrapped limit line:\n%s", view)
 	}
 }
 
