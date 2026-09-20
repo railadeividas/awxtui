@@ -376,18 +376,28 @@ func mockAWX(t *testing.T) *mock {
 		}})
 	})
 	// Credentials arrive over two pages, so the form only holds the whole
-	// catalogue if the client actually follows `next`.
+	// catalogue if the client actually follows `next`. kind is the real
+	// API's terse value ("ssh" for what the web UI calls "Machine"); the
+	// display name lives in summary_fields.credential_type.name instead.
 	mux.HandleFunc("/api/v2/credentials/", func(w http.ResponseWriter, r *http.Request) {
-		cred := func(id int, name, kind string) any {
+		cred := func(id int, name, kind, typeName string) any {
 			return map[string]any{"id": id, "name": name, "kind": kind,
-				"summary_fields": map[string]any{"credential_type": map[string]any{"name": kind}}}
+				"summary_fields": map[string]any{"credential_type": map[string]any{"name": typeName}}}
+		}
+		// AWX rejects a filter on kind itself, only credential_type__kind, and
+		// an ad hoc command asks for exactly that — machine credentials only.
+		if r.URL.Query().Get("credential_type__kind") == "ssh" {
+			write(w, map[string]any{"count": 2, "results": []any{
+				cred(39, "web_prod.ssh", "ssh", "Machine"), cred(40, "db_prod.ssh", "ssh", "Machine"),
+			}})
+			return
 		}
 		if r.URL.Query().Get("page") == "2" {
-			write(w, map[string]any{"count": 3, "results": []any{cred(41, "galaxy.token", "Ansible Galaxy")}})
+			write(w, map[string]any{"count": 3, "results": []any{cred(41, "galaxy.token", "galaxy_api_token", "Ansible Galaxy")}})
 			return
 		}
 		write(w, map[string]any{"count": 3, "next": "/api/v2/credentials/?page=2&page_size=200",
-			"results": []any{cred(39, "web_prod.ssh", "Machine"), cred(40, "db_prod.ssh", "Machine")}})
+			"results": []any{cred(39, "web_prod.ssh", "ssh", "Machine"), cred(40, "db_prod.ssh", "ssh", "Machine")}})
 	})
 	mux.HandleFunc("/api/v2/execution_environments/", func(w http.ResponseWriter, r *http.Request) {
 		write(w,
@@ -530,6 +540,27 @@ func mockAWX(t *testing.T) *mock {
 	}
 	mux.HandleFunc("/api/v2/workflow_job_templates/20/launch/", workflowLaunch(20, false))
 	mux.HandleFunc("/api/v2/workflow_job_templates/21/launch/", workflowLaunch(21, true))
+	mux.HandleFunc("/api/v2/ad_hoc_commands/", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"detail":"bad payload"}`, http.StatusBadRequest)
+			return
+		}
+		mk.mu.Lock()
+		mk.launches = append(mk.launches, body)
+		mk.mu.Unlock()
+		write(w, map[string]any{"id": 45, "type": "ad_hoc_command", "name": "shell", "status": "pending"})
+	})
+	mux.HandleFunc("/api/v2/ad_hoc_commands/45/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, map[string]any{"id": 45, "type": "ad_hoc_command", "name": "shell", "status": "successful"})
+	})
+	mux.HandleFunc("/api/v2/ad_hoc_commands/45/stdout/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") == "application/json" {
+			w.WriteHeader(http.StatusNotAcceptable)
+			return
+		}
+		fmt.Fprint(w, "PLAY [ad hoc]\n")
+	})
 	mux.HandleFunc("/api/v2/workflow_job_templates/21/survey_spec/", func(w http.ResponseWriter, r *http.Request) {
 		write(w, map[string]any{"name": "Rollout options", "spec": []any{
 			map[string]any{"type": "text", "variable": "wave", "question_name": "Rollout wave",
@@ -1007,7 +1038,7 @@ func TestEveryViewRendersWithinTerminalBounds(t *testing.T) {
 		m := New(awx.New(srv.URL, "test-token", false))
 		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = step(t, m, m.connect())
-		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc", "6", "enter", "G", "esc", "2", "f", "down", "right", "right", "space", "down", "enter", "2", "f", "d", "e", "p", "l", "o", "y", "esc", "G", "enter", "esc"} {
+		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "enter", "a", "esc", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc", "6", "enter", "G", "esc", "2", "f", "down", "right", "right", "space", "down", "enter", "2", "f", "d", "e", "p", "l", "o", "y", "esc", "G", "enter", "esc"} {
 			m = step(t, m, key(k))
 			out := m.View()
 			for i, line := range strings.Split(out, "\n") {

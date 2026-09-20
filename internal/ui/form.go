@@ -50,6 +50,12 @@ type formField struct {
 	idx     int      // fChoice selection / fMultiChoice highlight
 	values  []string // fChoice payload values, parallel to choices
 
+	// usePicker offers the full-screen picker on enter for an fChoice field
+	// whose catalogue is too long to cycle one at a time with ←→ — a
+	// credential or a module name, the same reason instance groups and
+	// labels get one as an fMultiChoice.
+	usePicker bool
+
 	input textinput.Model
 	area  textarea.Model
 
@@ -140,8 +146,10 @@ func (f *formField) blur() {
 // workflow can ask for.
 type form struct {
 	isWorkflow       bool
+	isAdHoc          bool
 	template         awx.JobTemplate
 	workflowTemplate awx.WorkflowJobTemplate
+	adHocInventory   awx.Inventory
 	config           awx.LaunchConfig
 	survey           awx.SurveySpec
 	fields           []formField
@@ -479,6 +487,47 @@ func newForm(src launchFormMsg, width int) form {
 	return f
 }
 
+// newAdHocForm builds the fixed field set for running a module directly
+// against an inventory. Unlike a template it has no ask_*_on_launch config
+// and no survey — every field AWX's own ad hoc launch offers is always
+// asked.
+func newAdHocForm(src adHocFormMsg, width int) form {
+	inputWidth := min(max(width-34, 16), 60)
+	f := form{isAdHoc: true, adHocInventory: src.inventory, width: width}
+
+	credFl := formField{key: "credential", label: "Credential", kind: fChoice, required: true, usePicker: true}
+	for _, c := range src.credentials {
+		label := c.Name
+		if ty := c.TypeName(); ty != "" {
+			label += " (" + ty + ")"
+		}
+		credFl.choices = append(credFl.choices, label)
+		credFl.values = append(credFl.values, strconv.Itoa(c.ID))
+	}
+	if len(credFl.choices) == 0 {
+		credFl = formField{key: "credential", label: "Credential id", kind: fText, required: true,
+			input: newInput("", "id", inputWidth)}
+	}
+	f.fields = append(f.fields, credFl)
+
+	moduleFl := formField{key: "module_name", label: "Module", kind: fChoice,
+		choices: awx.AdHocModules, values: awx.AdHocModules, usePicker: true}
+	f.fields = append(f.fields, moduleFl)
+
+	f.fields = append(f.fields,
+		formField{key: "module_args", label: "Arguments", kind: fText, input: newInput("", "e.g. name=nginx state=restarted", inputWidth)},
+		formField{key: "limit", label: "Limit", kind: fText, input: newInput("", "all hosts", inputWidth)},
+		formField{key: "verbosity", label: "Verbosity", kind: fChoice,
+			choices: []string{"0 normal", "1 verbose", "2 more verbose", "3 debug", "4 connection debug"},
+			values:  []string{"0", "1", "2", "3", "4"}},
+		formField{key: "become_enabled", label: "Become", kind: fChoice,
+			choices: []string{"off", "on"}, values: []string{"false", "true"}},
+	)
+
+	f.fields[0].focus()
+	return f
+}
+
 // canStartImmediately reports whether there is nothing to fill in.
 func (f form) canStartImmediately() bool { return len(f.fields) == 0 }
 
@@ -685,10 +734,10 @@ func (f form) payload() (map[string]any, error) {
 			}
 			out[fl.key] = n
 
-		case fl.key == "diff_mode":
+		case fl.key == "diff_mode", fl.key == "become_enabled":
 			out[fl.key] = v == "true"
 
-		case fl.key == "inventory", fl.key == "verbosity":
+		case fl.key == "inventory", fl.key == "verbosity", fl.key == "credential":
 			n, err := strconv.Atoi(strings.TrimSpace(v))
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", fl.label, err)

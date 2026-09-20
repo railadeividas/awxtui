@@ -102,6 +102,14 @@ type (
 		instanceGroups   []awx.InstanceGroup
 		labels           []awx.Label
 	}
+	// adHocFormMsg carries what the ad hoc launch form needs: the inventory
+	// it will run against, chosen before this fetch even starts, and the
+	// credential catalogue to pick from.
+	adHocFormMsg struct {
+		gen         int
+		inventory   awx.Inventory
+		credentials []awx.Credential
+	}
 	canceledMsg struct {
 		id  int
 		gen int
@@ -462,6 +470,34 @@ func (m *Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 			msg.labels, _ = c.AllLabels(ctx, maxPages)
 		}
 		return msg
+	})
+}
+
+// fetchAdHocForm reads the credential catalogue an ad hoc launch against inv
+// picks from — machine credentials only, the same as AWX's own ad hoc launch
+// UI, since nothing else can connect to a host. Best effort, like every
+// catalogue the launch form offers: with none loaded the form falls back to
+// typing a credential id.
+func (m *Model) fetchAdHocForm(inv awx.Inventory) tea.Cmd {
+	c, gen := m.client, m.gen
+	return m.request(func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		creds, _ := c.AllAdHocCredentials(ctx, maxPages)
+		return adHocFormMsg{gen: gen, inventory: inv, credentials: creds}
+	})
+}
+
+func (m *Model) launchAdHoc(payload map[string]any) tea.Cmd {
+	c, gen := m.client, m.gen
+	return m.request(func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		job, err := c.LaunchAdHoc(ctx, payload)
+		if err != nil {
+			return errMsg{err: err, gen: gen, tab: tabCount}
+		}
+		return launchedMsg{job: job, gen: gen}
 	})
 }
 

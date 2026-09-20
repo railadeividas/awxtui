@@ -46,6 +46,9 @@ func TestReadOnlyRefusesWrites(t *testing.T) {
 	if err := c.SetScheduleEnabled(ctx, 1, false); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("SetScheduleEnabled: expected ErrReadOnly, got %v", err)
 	}
+	if _, err := c.LaunchAdHoc(ctx, nil); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("LaunchAdHoc: expected ErrReadOnly, got %v", err)
+	}
 	if len(methods) > 0 {
 		t.Errorf("read-only client still sent requests: %v", methods)
 	}

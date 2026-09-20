@@ -733,6 +733,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeLaunch
 		return m, textinput.Blink
 
+	case adHocFormMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		m.notice = ""
+		m.form = newAdHocForm(msg, m.width)
+		m.mode = modeLaunch
+		return m, textinput.Blink
+
 	case launchedMsg:
 		if msg.gen != m.gen {
 			return m, nil
@@ -877,7 +886,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// A multi-select's catalogue can run to dozens of entries that
 			// never fit the field's one-line window; enter opens the full
 			// list instead of submitting, and ctrl+s launches from here on.
-			if fl := m.form.focused(); fl != nil && fl.kind == fMultiChoice {
+			// A single-choice field marked usePicker (credential, module)
+			// gets the same full list for the same reason.
+			if fl := m.form.focused(); fl != nil && (fl.kind == fMultiChoice || (fl.kind == fChoice && fl.usePicker)) {
 				m.openPicker()
 				return m, nil
 			}
@@ -901,10 +912,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.form.problem = "read-only mode: launching is disabled"
 			return m, nil
 		}
-		id := m.form.launchID()
 		m.form.submitting = true
 		m.form.problem = ""
 		m.err = nil
+		if m.form.isAdHoc {
+			payload["inventory"] = m.form.adHocInventory.ID
+			return m, m.launchAdHoc(payload)
+		}
+		id := m.form.launchID()
 		if m.form.isWorkflow {
 			return m, m.launchWorkflow(id, payload)
 		}

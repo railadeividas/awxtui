@@ -335,22 +335,28 @@ func (m Model) launchModal() string {
 	inner := min(m.width-8, 78)
 
 	var head strings.Builder
-	head.WriteString(titleStyle.Render("Launch") + "  " + rowStyle.Render(f.name()))
-	head.WriteString("\n")
-	meta := []string{fmt.Sprintf("#%d", f.id())}
-	if f.isWorkflow {
-		if org := f.workflowTemplate.SummaryFields.Organization.Name; org != "" {
-			meta = append(meta, "org "+org)
+	var meta []string
+	if f.isAdHoc {
+		head.WriteString(titleStyle.Render("Launch") + "  " + rowStyle.Render("Ad hoc command"))
+		meta = []string{"inventory " + f.adHocInventory.Name}
+	} else {
+		head.WriteString(titleStyle.Render("Launch") + "  " + rowStyle.Render(f.name()))
+		meta = []string{fmt.Sprintf("#%d", f.id())}
+		if f.isWorkflow {
+			if org := f.workflowTemplate.SummaryFields.Organization.Name; org != "" {
+				meta = append(meta, "org "+org)
+			}
+		} else if p := f.template.SummaryFields.Project.Name; p != "" {
+			meta = append(meta, "project "+p)
 		}
-	} else if p := f.template.SummaryFields.Project.Name; p != "" {
-		meta = append(meta, "project "+p)
+		if inv := f.config.Defaults.Inventory.Name; inv != "" {
+			meta = append(meta, "inventory "+inv)
+		}
+		if !f.isWorkflow && f.template.Playbook != "" {
+			meta = append(meta, f.template.Playbook)
+		}
 	}
-	if inv := f.config.Defaults.Inventory.Name; inv != "" {
-		meta = append(meta, "inventory "+inv)
-	}
-	if !f.isWorkflow && f.template.Playbook != "" {
-		meta = append(meta, f.template.Playbook)
-	}
+	head.WriteString("\n")
 	head.WriteString(metaStyle.Render(strings.Join(meta, "  ·  ")))
 
 	if m.client.IsReadOnly() {
@@ -384,9 +390,14 @@ func (m Model) formKeys() []legend {
 	f := &m.form
 	pairs := [][2]string{{"enter", "launch"}, {"↑↓", "field"}}
 	if len(f.fields) > 0 {
-		switch f.fields[f.cursor].kind {
+		switch fl := f.fields[f.cursor]; fl.kind {
 		case fChoice:
-			pairs = append(pairs, [2]string{"←→", "choose"})
+			if fl.usePicker {
+				pairs = [][2]string{{"ctrl+s", "launch"}, {"↑↓", "field"},
+					{"←→", "choose"}, {"enter", "list"}}
+			} else {
+				pairs = append(pairs, [2]string{"←→", "choose"})
+			}
 		case fMultiChoice:
 			pairs = [][2]string{{"ctrl+s", "launch"}, {"↑↓", "field"},
 				{"←→", "move"}, {"space", "toggle"}, {"enter", "list"}}
@@ -564,6 +575,7 @@ func (m Model) helpModal() string {
 		{"enter", "launch · open job output · project or inventory details · in job details: its output"},
 		{"s", "sync: SCM update a project · update an inventory's sources"},
 		{"h", "in inventory details: list its hosts"},
+		{"a", "in inventory details: launch an ad hoc command"},
 		{"p", "pin the highlighted record, or the run whose output or details are open"},
 		{"f", "narrow what a list shows · follow job output"},
 		{"c", "cancel a running job"},
@@ -594,7 +606,7 @@ func (m Model) statusView() string {
 	case modeProject:
 		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
 	case modeInventory:
-		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"h", "hosts"}, {"s", "sync all"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
+		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"h", "hosts"}, {"a", "ad hoc"}, {"s", "sync all"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
 	case modeSchedule:
 		toggle := "disable"
 		if !m.schedule.schedule.Enabled {
@@ -617,8 +629,12 @@ func (m Model) statusView() string {
 		keys = plainKeys([][2]string{{"↑↓", "choose"}, {"←→", "move/set"}, {"space", "toggle"},
 			{"c", "clear"}, {"enter", "apply"}, {"esc", "cancel"}})
 	case modePick:
-		keys = plainKeys([][2]string{{"↑↓", "move"}, {"space", "toggle"}, {"a", "all"},
-			{"c", "none"}, {"enter", "done"}})
+		if fl := m.form.focused(); fl != nil && fl.kind == fChoice {
+			keys = plainKeys([][2]string{{"↑↓", "move"}, {"enter", "choose"}, {"esc", "cancel"}})
+		} else {
+			keys = plainKeys([][2]string{{"↑↓", "move"}, {"space", "toggle"}, {"a", "all"},
+				{"c", "none"}, {"enter", "done"}})
+		}
 	case modeLaunch:
 		keys = m.formKeys()
 	default:

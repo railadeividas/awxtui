@@ -104,6 +104,7 @@ AWX has said who you are.
 | `s` | sync: SCM update a project · update an inventory's sources |
 | `t` | on the Schedules tab or a schedule's details: enable or disable it |
 | `h` | inside inventory details: list its hosts |
+| `a` | inside inventory details: launch an ad hoc command against it |
 | `p` | pin the highlighted record, or the run whose output is open |
 | `f` | narrow the view: pinned only, and on Jobs also owner, status and kind |
 | `↑↓` / `tab` | move between fields in the launch form; `←→` pick a choice, `space` toggles a multiselect, `enter` on a multiselect opens its full list, `ctrl+s` submits |
@@ -188,6 +189,35 @@ its new status shows.
 
 Syncing is a write: a read-only client refuses it before anything reaches the
 network, and a held-down `s` cannot start the same update twice.
+
+## Ad hoc commands
+
+`a` inside an inventory's details opens a fixed form for running a module
+directly against it, without a job template: credential, module (`command`,
+`shell`, `ping`, `systemd`, and the rest of the 18 AWX permits), module
+arguments, limit, verbosity and become. There is no `ask_*_on_launch` config
+or survey to read first — every field is always asked, and the inventory is
+whichever one's details are open, not typed in.
+
+Credential and module each open the same full-screen picker as instance
+groups on a template — `enter` lists the whole catalogue vertically instead of
+cycling one at a time with `←→` — minus the checkboxes: there is exactly one
+answer, so moving the highlight has already chosen it, and `enter` or `esc`
+both just close the list.
+
+The credential list is narrowed to machine credentials, the same as AWX's own
+ad hoc launch: `kind` itself is not a filterable field, but
+`?credential_type__kind=ssh` is (confirmed against a live instance), and
+that's the terse value the API uses for what its UI calls "Machine" — nothing
+else can authenticate to a host, so a vault or cloud credential is excluded
+server-side rather than fetched and left unusable in the list.
+
+`POST /api/v2/ad_hoc_commands/` answers with the ad hoc command it started,
+which opens in the same output view as any other run: it is its own
+collection, like a project update or inventory sync, with its own `/stdout/`,
+`/events/` and `/cancel/` endpoints. AWX names the record after the module
+itself (`systemd`, `shell`) and leaves `extra_vars` as `"---"` when none is
+given.
 
 ## Schedules
 
@@ -400,6 +430,7 @@ that look like a failed load.
 | `internal/awx` | minimal AWX v2 API client |
 | `internal/awx/launch.go` | launch metadata, survey specs, YAML/JSON extra vars |
 | `internal/awx/sync.go` | project updates, inventory sources, inventory sync |
+| `internal/awx/adhoc.go` | ad hoc commands: module list, machine-credential lookup, launch |
 | `internal/ui` | Bubble Tea model, key handling, rendering |
 | `internal/ui/form.go` | launch form: fields, validation, payload building |
 | `internal/ui/output.go` | job output view: find, highlight, failure/task jumps |
@@ -482,7 +513,6 @@ the first page and merging it, so the pages you scrolled through stay put.
 
 ## Not done yet
 
-- Ad-hoc commands.
 - A workflow's own graph: a workflow job's details list every node's name
   and status, but not the edges between them, approval nodes, or retrying
   one node on its own. Look at the AWX UI for the graph itself.

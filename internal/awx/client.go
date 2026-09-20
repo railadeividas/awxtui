@@ -452,20 +452,24 @@ func (c *Client) SetScheduleEnabled(ctx context.Context, id int, enabled bool) e
 // project SCM update or an inventory sync. AWX serialises all three with the
 // same core fields and tells them apart with Type.
 type Job struct {
-	ID            int        `json:"id"`
-	Type          string     `json:"type"`
-	Name          string     `json:"name"`
-	Status        string     `json:"status"`
-	Failed        bool       `json:"failed"`
-	Started       *time.Time `json:"started"`
-	Finished      *time.Time `json:"finished"`
-	Elapsed       float64    `json:"elapsed"`
-	JobType       string     `json:"job_type"`
-	LaunchType    string     `json:"launch_type"`
-	ExtraVars     string     `json:"extra_vars"`
-	Limit         string     `json:"limit"`
-	JobTags       string     `json:"job_tags"`
-	SkipTags      string     `json:"skip_tags"`
+	ID         int        `json:"id"`
+	Type       string     `json:"type"`
+	Name       string     `json:"name"`
+	Status     string     `json:"status"`
+	Failed     bool       `json:"failed"`
+	Started    *time.Time `json:"started"`
+	Finished   *time.Time `json:"finished"`
+	Elapsed    float64    `json:"elapsed"`
+	JobType    string     `json:"job_type"`
+	LaunchType string     `json:"launch_type"`
+	ExtraVars  string     `json:"extra_vars"`
+	Limit      string     `json:"limit"`
+	JobTags    string     `json:"job_tags"`
+	SkipTags   string     `json:"skip_tags"`
+	// ModuleName and ModuleArgs are set only on an ad hoc command; AWX
+	// leaves them empty on every other kind of run.
+	ModuleName    string `json:"module_name"`
+	ModuleArgs    string `json:"module_args"`
 	SummaryFields struct {
 		CreatedBy struct {
 			ID       int    `json:"id"`
@@ -521,6 +525,7 @@ const (
 	ResourceProjectUpdates   Resource = "project_updates"
 	ResourceInventoryUpdates Resource = "inventory_updates"
 	ResourceWorkflowJobs     Resource = "workflow_jobs"
+	ResourceAdHocCommands    Resource = "ad_hoc_commands"
 )
 
 // eventsPath is the events sub-resource of a collection. Playbook jobs call it
@@ -543,6 +548,8 @@ func (r Resource) recordType() string {
 		return "inventory_update"
 	case ResourceWorkflowJobs:
 		return "workflow_job"
+	case ResourceAdHocCommands:
+		return "ad_hoc_command"
 	default:
 		return "job"
 	}
@@ -552,7 +559,7 @@ func (r Resource) recordType() string {
 // puts in the record itself. An unknown or missing type falls back to jobs,
 // which is what every record served from /api/v2/jobs/ is.
 func (j Job) Resource() Resource {
-	for _, r := range []Resource{ResourceProjectUpdates, ResourceInventoryUpdates, ResourceWorkflowJobs} {
+	for _, r := range []Resource{ResourceProjectUpdates, ResourceInventoryUpdates, ResourceWorkflowJobs, ResourceAdHocCommands} {
 		if j.Type == r.recordType() {
 			return r
 		}
@@ -563,8 +570,16 @@ func (j Job) Resource() Resource {
 // IsSync reports whether this run is a project update or an inventory sync
 // rather than a playbook job.
 func (j Job) IsSync() bool {
-	return j.Resource() != ResourceJobs && j.Resource() != ResourceWorkflowJobs
+	switch j.Resource() {
+	case ResourceProjectUpdates, ResourceInventoryUpdates:
+		return true
+	}
+	return false
 }
+
+// IsAdHoc reports whether this run is a module launched directly against an
+// inventory rather than a playbook job template.
+func (j Job) IsAdHoc() bool { return j.Type == "ad_hoc_command" }
 
 // IsWorkflow reports whether this run is a workflow job: a graph of nodes
 // rather than a single playbook run. A workflow job has no stdout of its
@@ -591,15 +606,15 @@ func (c *Client) Jobs(ctx context.Context, pageURL, search string) (Page[Job], e
 const jobsPageSize = 100
 
 // Supported reports whether awxtui can show this run's output.
-// /api/v2/unified_jobs/ also serves ad hoc commands and system jobs, which
-// live in collections awxtui does not implement, and workflow jobs, which
-// have no stdout of their own — their output lives per-node. Resource would
-// quietly call an ad hoc command or system job a job and then ask
-// /api/v2/jobs/ for output that is not there.
+// /api/v2/unified_jobs/ also serves system jobs, which live in a collection
+// awxtui does not implement, and workflow jobs, which have no stdout of
+// their own — their output lives per-node. Resource would quietly call a
+// system job a job and then ask /api/v2/jobs/ for output that is not there.
 func (j Job) Supported() bool {
 	switch j.Type {
 	case "", ResourceJobs.recordType(),
-		ResourceProjectUpdates.recordType(), ResourceInventoryUpdates.recordType():
+		ResourceProjectUpdates.recordType(), ResourceInventoryUpdates.recordType(),
+		ResourceAdHocCommands.recordType():
 		return true
 	}
 	return false

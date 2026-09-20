@@ -13,9 +13,16 @@ import (
 // instance groups or 52 credentials cannot be read a handful at a time. This
 // file adds a full-screen picker, opened from that field with enter, that
 // lists every entry vertically and scrolls like any other list here.
+//
+// A single-choice field can face the same problem — an ad hoc command's
+// credential or module — without being a multi-select at all, so an fChoice
+// field can opt in with usePicker and gets the same list, minus the
+// checkboxes: moving the highlight is already choosing, so enter and esc
+// both just close it.
 
 // openPicker enters the picker for the focused field. The caller has already
-// checked the field is an fMultiChoice with something to choose from.
+// checked the field is an fMultiChoice, or an fChoice marked usePicker, with
+// something to choose from.
 func (m *Model) openPicker() {
 	m.mode = modePick
 	m.form.pickOffset = 0
@@ -28,16 +35,22 @@ func (m Model) pickHeight() int {
 
 func (m Model) handlePickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	fl := m.form.focused()
-	if fl == nil || fl.kind != fMultiChoice {
+	if fl == nil || (fl.kind != fMultiChoice && !(fl.kind == fChoice && fl.usePicker)) {
 		m.mode = modeLaunch
 		return m, nil
 	}
+	single := fl.kind == fChoice
 	n := len(fl.choices)
 	h := m.pickHeight()
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "esc", "enter":
+	case "esc":
+		m.mode = modeLaunch
+		return m, nil
+	case "enter":
+		// idx is the field's own value for a single choice, so moving the
+		// highlight has already chosen it; enter and esc both just close.
 		m.mode = modeLaunch
 		return m, nil
 	case "up", "k":
@@ -53,16 +66,20 @@ func (m Model) handlePickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "end", "G":
 		fl.idx = n - 1
 	case " ":
-		if fl.idx < len(fl.chosen) {
+		if !single && fl.idx < len(fl.chosen) {
 			fl.chosen[fl.idx] = !fl.chosen[fl.idx]
 		}
 	case "a":
-		for i := range fl.chosen {
-			fl.chosen[i] = true
+		if !single {
+			for i := range fl.chosen {
+				fl.chosen[i] = true
+			}
 		}
 	case "c":
-		for i := range fl.chosen {
-			fl.chosen[i] = false
+		if !single {
+			for i := range fl.chosen {
+				fl.chosen[i] = false
+			}
 		}
 	}
 	m.form.pickOffset = clampOffset(fl.idx, m.form.pickOffset, h, n)
@@ -76,6 +93,7 @@ func (m Model) pickerModal() string {
 	if fl == nil {
 		return ""
 	}
+	single := fl.kind == fChoice
 	width := min(m.width-8, 70)
 	h := m.pickHeight()
 	n := len(fl.choices)
@@ -83,20 +101,27 @@ func (m Model) pickerModal() string {
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(fl.label))
-	b.WriteString("  " + dimStyle.Render(fmt.Sprintf("%d of %d selected", len(fl.selections()), n)))
+	if single {
+		b.WriteString("  " + dimStyle.Render("choose one"))
+	} else {
+		b.WriteString("  " + dimStyle.Render(fmt.Sprintf("%d of %d selected", len(fl.selections()), n)))
+	}
 	b.WriteString("\n\n")
 
 	end := min(offset+h, n)
 	for i := offset; i < end; i++ {
-		box := "[ ]"
-		if i < len(fl.chosen) && fl.chosen[i] {
-			box = "[x]"
+		line := fl.choices[i]
+		if !single {
+			box := "[ ]"
+			if i < len(fl.chosen) && fl.chosen[i] {
+				box = "[x]"
+			}
+			line = box + " " + line
 		}
-		line := box + " " + fl.choices[i]
 		switch {
 		case i == fl.idx:
 			b.WriteString(rowSelStyle.Render("▌" + line))
-		case i < len(fl.chosen) && fl.chosen[i]:
+		case !single && i < len(fl.chosen) && fl.chosen[i]:
 			b.WriteString(rowStyle.Render(" " + line))
 		default:
 			b.WriteString(dimStyle.Render(" " + line))

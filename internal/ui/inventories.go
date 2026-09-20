@@ -91,6 +91,15 @@ func (m Model) handleInventoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.hostNext, m.hostCount, m.hostPages = "", 0, 0
 		m.hostLoading = true
 		return m, m.fetchHosts(inv.ID, inv.Name, "", false)
+	case "a":
+		// Unlike 'h', this stays on the details view rather than switching
+		// right away: there is no ad hoc equivalent of the hosts view to
+		// switch to and spin in, and clearing m.inventory here while staying
+		// in modeInventory would render an empty "Inventory #0" until the
+		// credential catalogue lands. adHocFormMsg is what actually leaves
+		// this view, once the form is ready to show.
+		m.err, m.notice = nil, "reading credentials…"
+		return m, m.fetchAdHocForm(m.inventory.inventory)
 	case "s":
 		inv := m.inventory.inventory
 		// AWX would answer the same way, but saying it here saves a request
