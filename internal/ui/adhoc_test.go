@@ -150,6 +150,25 @@ func TestAdHocLaunch(t *testing.T) {
 	}
 }
 
+// esc from the ad hoc form must return to the inventory's details, since that
+// is where ad hoc is reached from — not all the way out to the inventories
+// list, the same as the members view.
+func TestAdHocEscReturnsToInventoryDetails(t *testing.T) {
+	srv := mockAWX(t)
+	m := openAdHocForm(t, srv, "production")
+
+	m = step(t, m, key("esc"))
+	if m.mode != modeInventory || m.inventory.inventory.Name != "production" {
+		t.Fatalf("esc from ad hoc left mode %v inventory %+v, want details for production",
+			m.mode, m.inventory.inventory)
+	}
+
+	m = step(t, m, key("esc"))
+	if m.mode != modeList {
+		t.Fatalf("esc from details left mode %v, want the list", m.mode)
+	}
+}
+
 // A read-only client must refuse to submit the ad hoc form, the same way it
 // refuses a template launch.
 func TestAdHocLaunchReadOnly(t *testing.T) {

@@ -36,7 +36,7 @@ const (
 	modeFilter
 	modeOutput
 	modeLaunch
-	modeHosts
+	modeMembers
 	modeHelp
 	modeError
 	modeInstances
@@ -145,19 +145,10 @@ type Model struct {
 	outputRetries int
 	follow        bool
 
-	// inventory drill-down
-	hostTitle     string
-	hostRows      []row
-	hostCursor    int
-	hostOffset    int
-	hostInventory int
-	hostNext      string
-	hostCount     int
-	hostPages     int
-	// hostLoading is true from the moment the hosts view is opened until its
-	// first page lands, so the view can show a spinner instead of an empty
-	// table that looks like the inventory truly has no hosts.
-	hostLoading bool
+	// inventory drill-down: an inventory's hosts or groups, browsed and
+	// multi-selected to build a launch's default limit.
+	members  memberList
+	limitSel limitSelection
 
 	// launch form for the selected template
 	form form
@@ -256,11 +247,11 @@ func (m Model) tableHeight() int {
 }
 
 func (m *Model) moveCursor(delta int) tea.Cmd {
-	if m.mode == modeHosts {
-		n := len(m.hostRows)
-		m.hostCursor = clamp(m.hostCursor+delta, 0, n-1)
-		m.hostOffset = clampOffset(m.hostCursor, m.hostOffset, m.tableHeight(), n)
-		return m.loadMoreHosts()
+	if m.mode == modeMembers {
+		n := len(m.members.rows)
+		m.members.cursor = clamp(m.members.cursor+delta, 0, n-1)
+		m.members.offset = clampOffset(m.members.cursor, m.members.offset, m.tableHeight(), n)
+		return m.loadMoreMembers()
 	}
 	n := len(m.visible(m.active))
 	m.cursor[m.active] = clamp(m.cursor[m.active]+delta, 0, n-1)
@@ -299,17 +290,6 @@ func (m *Model) continueLoad(t tab) tea.Cmd {
 		return nil
 	}
 	return m.nextPage(t)
-}
-
-func (m *Model) loadMoreHosts() tea.Cmd {
-	if m.hostNext == "" || m.hostPages >= maxPages ||
-		len(m.hostRows)-m.hostCursor > loadMoreWithin {
-		return nil
-	}
-	m.hostPages++
-	next := m.hostNext
-	m.hostNext = ""
-	return m.fetchHosts(m.hostInventory, m.hostTitle, next, true)
 }
 
 func (m *Model) selected() (row, bool) {
@@ -661,22 +641,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case hostsMsg:
-		if msg.gen != m.gen {
+	case membersMsg:
+		if msg.gen != m.gen || msg.kind != m.members.kind || msg.inventoryID != m.members.inventory {
 			return m, nil
 		}
-		m.mode = modeHosts
-		m.hostLoading = false
-		m.hostTitle = msg.inventory
-		m.hostInventory = msg.inventoryID
-		m.hostNext = msg.next
-		m.hostCount = msg.count
+		m.mode = modeMembers
+		m.members.loading = false
+		m.members.invName = msg.inventory
+		m.members.next = msg.next
+		m.members.count = msg.count
+		rows, names := memberRows(msg.kind, msg.hosts, msg.groups)
 		if msg.cont {
-			m.hostRows = append(m.hostRows, hostRows(msg.hosts)...)
+			m.members.rows = append(m.members.rows, rows...)
+			m.members.names = append(m.members.names, names...)
 		} else {
-			m.hostRows = hostRows(msg.hosts)
-			m.hostCursor, m.hostOffset = 0, 0
-			m.hostPages = 1
+			m.members.rows = rows
+			m.members.names = names
+			m.members.cursor, m.members.offset = 0, 0
+			m.members.pages = 1
 		}
 		return m, nil
 
@@ -686,6 +668,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.inventory.sources = msg.sources
 		m.inventory.loading = false
+		return m, nil
+
+	case inventoryPreviewMsg:
+		if msg.gen != m.gen || msg.inventoryID != m.inventory.inventory.ID {
+			return m, nil
+		}
+		m.inventory.previewLoading = false
+		m.inventory.previewErr = msg.err
+		if msg.err == nil {
+			m.inventory.hostNames, m.inventory.hostTotal = msg.hostNames, msg.hostTotal
+			m.inventory.groupNames, m.inventory.groupTotal = msg.groupNames, msg.groupTotal
+		}
 		return m, nil
 
 	case jobDetailMsg:
@@ -786,7 +780,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.syncing = false
-		m.hostLoading = false
+		m.members.loading = false
 		m.err = msg.err
 		if msg.tab < tabCount {
 			m.fetching[msg.tab], m.searching[msg.tab] = false, false
@@ -877,6 +871,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		switch key {
 		case "esc":
+			// An ad hoc command is only reached from an inventory's details,
+			// so back goes there — not all the way out to the inventories
+			// list — the same as the members view already does.
+			if m.form.isAdHoc {
+				inv := m.form.adHocInventory
+				m.form = form{}
+				if fresh, ok := m.inventoryByID(inv.ID); ok {
+					return m, m.openInventoryDetail(fresh)
+				}
+				m.mode = modeList
+				return m, nil
+			}
 			m.mode = modeList
 			m.form = form{}
 			return m, nil
@@ -953,27 +959,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeOutput:
 		return m.handleOutputKey(msg)
 
-	case modeHosts:
-		switch key {
-		case "q", "esc":
-			// Hosts are only reached from an inventory's details, so back
-			// goes there rather than all the way out to the list.
-			if inv, ok := m.inventoryByID(m.hostInventory); ok {
-				return m, m.openInventoryDetail(inv)
-			}
-			m.mode = modeList
-			return m, nil
-		case "ctrl+c":
-			return m, tea.Quit
-		case "up", "k":
-			return m, m.moveCursor(-1)
-		case "down", "j":
-			return m, m.moveCursor(1)
-		case "?":
-			m.mode = modeHelp
-			return m, nil
-		}
-		return m, nil
+	case modeMembers:
+		return m.handleMembersKey(msg)
 	}
 
 	// modeList

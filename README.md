@@ -103,7 +103,8 @@ AWX has said who you are.
 | `enter` | launch a template or workflow · open job output · open project, inventory or schedule details · for a workflow job: its launch details |
 | `s` | sync: SCM update a project · update an inventory's sources |
 | `t` | on the Schedules tab or a schedule's details: enable or disable it |
-| `h` | inside inventory details: list its hosts |
+| `h` / `g` | inside inventory details: list its hosts / groups — `space` to select, `a` to select all, `c` to clear, `enter` to use the selection as a launch's limit |
+| `x` | inside inventory details: clear a pending limit selection |
 | `a` | inside inventory details: launch an ad hoc command against it |
 | `p` | pin the highlighted record, or the run whose output is open |
 | `f` | narrow the view: pinned only, and on Jobs also owner, status and kind |
@@ -218,6 +219,32 @@ collection, like a project update or inventory sync, with its own `/stdout/`,
 `/events/` and `/cancel/` endpoints. AWX names the record after the module
 itself (`systemd`, `shell`) and leaves `extra_vars` as `"---"` when none is
 given.
+
+`esc` from the form returns to the same inventory's details, not all the way
+out to the inventories list — ad hoc is only ever reached from there.
+
+## Picking hosts and groups for a limit
+
+Before AWX groups had any representation here, the only way to target a
+`limit` was to already know a host or group's exact name and type it in
+blind. `h` and `g` inside an inventory's details now open a browsable,
+paginated list of its hosts or groups (`/api/v2/inventories/{id}/hosts/` and
+`/api/v2/inventories/{id}/groups/`); `space` toggles a row, `a`/`c` select or
+clear everything loaded, and `enter` stores the picked names and returns to
+the details.
+
+That selection is not itself a `limit` field — it only offers a default the
+next time one is asked for, `:`-joined the way AWX's own limit syntax ORs
+alternatives together. It fills the ad hoc form's `limit` (opened with `a`),
+or a job template's, but only when that template's own default is empty and
+its inventory is the one the selection was made against; a template that
+already sets its own default limit always keeps it. `x` in the details view
+clears a pending selection.
+
+The details modal also names a handful of hosts and groups inline, next to
+the counts it already showed, from a small (`page_size=8`) fetch made
+alongside the sources request — enough for a quick look without always
+having to open the dedicated list.
 
 ## Schedules
 
@@ -436,7 +463,8 @@ that look like a failed load.
 | `internal/ui/output.go` | job output view: find, highlight, failure/task jumps |
 | `internal/ui/jobs.go` | job launch details: what a run was started with |
 | `internal/ui/projects.go` | project details: SCM settings, update flags |
-| `internal/ui/inventories.go` | inventory details: each source's real sync status |
+| `internal/ui/inventories.go` | inventory details: each source's real sync status, host/group preview |
+| `internal/ui/members.go` | an inventory's hosts/groups: browsing, multi-select, the limit it feeds |
 | `internal/ui/schedules.go` | schedule details: rrule, next run, enable/disable |
 | `internal/ui/table.go` | responsive column layout (columns shrink, then drop) |
 | `internal/ui/pins.go` | pinning, on every tab |
@@ -447,10 +475,10 @@ that look like a failed load.
 ## Tests
 
 `go test ./...` drives the whole model against a mock AWX API: connect, filter,
-launch, follow output, drill into inventory hosts, read project, inventory and
-schedule details, sync a project and an inventory's sources, toggle a
-schedule's enabled flag, cancel a job, plus a check that every view fits
-inside 80×24, 120×40 and 200×50 terminals.
+launch, follow output, drill into an inventory's hosts and groups and pick a
+limit from them, read project, inventory and schedule details, sync a project
+and an inventory's sources, toggle a schedule's enabled flag, cancel a job,
+plus a check that every view fits inside 80×24, 120×40 and 200×50 terminals.
 
 Set `AWXTUI_SHOW=1` to print the rendered views while testing:
 

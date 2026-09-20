@@ -58,11 +58,11 @@ func TestInventoryDetailsHKeyOpensHosts(t *testing.T) {
 	m = step(t, m, key("enter"))
 	m = step(t, m, key("h"))
 
-	if m.mode != modeHosts {
-		t.Fatalf("h in inventory details left mode %v, want modeHosts", m.mode)
+	if m.mode != modeMembers {
+		t.Fatalf("h in inventory details left mode %v, want modeMembers", m.mode)
 	}
-	if m.hostTitle != "production" || len(m.hostRows) == 0 {
-		t.Fatalf("h did not open production's hosts: title %q, rows %d", m.hostTitle, len(m.hostRows))
+	if m.members.invName != "production" || len(m.members.rows) == 0 {
+		t.Fatalf("h did not open production's hosts: title %q, rows %d", m.members.invName, len(m.members.rows))
 	}
 	if m.inventory.inventory.ID != 0 {
 		t.Errorf("h left inventory detail state behind: %+v", m.inventory)
@@ -77,11 +77,11 @@ func TestInventoryHKeyShowsHostsLoadingImmediately(t *testing.T) {
 	m = step(t, m, key("enter"))
 
 	busy := probe(t, m, key("h"))
-	if busy.mode != modeHosts {
-		t.Fatalf("h left mode %v before the response landed, want modeHosts", busy.mode)
+	if busy.mode != modeMembers {
+		t.Fatalf("h left mode %v before the response landed, want modeMembers", busy.mode)
 	}
-	if len(busy.hostRows) != 0 || !busy.hostLoading {
-		t.Fatalf("expected an empty, loading hosts view, got %d rows loading=%v", len(busy.hostRows), busy.hostLoading)
+	if len(busy.members.rows) != 0 || !busy.members.loading {
+		t.Fatalf("expected an empty, loading hosts view, got %d rows loading=%v", len(busy.members.rows), busy.members.loading)
 	}
 	view := stripANSI(busy.View())
 	if !strings.Contains(view, "fetching hosts") {
@@ -89,8 +89,8 @@ func TestInventoryHKeyShowsHostsLoadingImmediately(t *testing.T) {
 	}
 
 	settled := step(t, m, key("h"))
-	if settled.hostLoading || len(settled.hostRows) == 0 {
-		t.Errorf("hosts never settled: loading=%v rows=%d", settled.hostLoading, len(settled.hostRows))
+	if settled.members.loading || len(settled.members.rows) == 0 {
+		t.Errorf("hosts never settled: loading=%v rows=%d", settled.members.loading, len(settled.members.rows))
 	}
 }
 
@@ -101,8 +101,8 @@ func TestHostsEscReturnsToInventoryDetails(t *testing.T) {
 	m = rowAt(t, m, "production")
 	m = step(t, m, key("enter"))
 	m = step(t, m, key("h"))
-	if m.mode != modeHosts {
-		t.Fatalf("h left mode %v, want modeHosts", m.mode)
+	if m.mode != modeMembers {
+		t.Fatalf("h left mode %v, want modeMembers", m.mode)
 	}
 
 	m = step(t, m, key("esc"))

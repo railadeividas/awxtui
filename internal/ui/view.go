@@ -55,8 +55,6 @@ var tabColumns = map[tab][]col{
 	tabWorkflows:   {{title: "name", width: 0}, {title: "organization", width: 22}, {title: "inventory", width: 20}, {title: "last run", width: 14}, {title: "when", width: 11}},
 }
 
-var hostColumns = []col{{title: "host", width: 0}, {title: "state", width: 10}, {title: "description", width: 32}}
-
 func (m Model) View() string {
 	if !m.ready {
 		return "\n  " + m.spin.View() + " connecting to AWX…\n"
@@ -92,8 +90,8 @@ func (m Model) View() string {
 		b.WriteString(m.pane(m.showModal()))
 	case modePick:
 		b.WriteString(m.pane(m.pickerModal()))
-	case modeHosts:
-		b.WriteString(m.hostsBody())
+	case modeMembers:
+		b.WriteString(m.membersBody())
 	default:
 		b.WriteString(m.listBody())
 	}
@@ -160,7 +158,7 @@ func (m Model) tabsView() string {
 	parts := make([]string, 0, tabCount)
 	for t := tab(0); t < tabCount; t++ {
 		label := fmt.Sprintf("%d %s", t+1, tabNames[t])
-		if t == m.active && m.mode != modeHosts {
+		if t == m.active && m.mode != modeMembers {
 			parts = append(parts, tabActiveStyle.Render(label))
 		} else {
 			parts = append(parts, tabStyle.Render(label))
@@ -168,8 +166,9 @@ func (m Model) tabsView() string {
 	}
 	left := strings.Join(parts, "")
 	right := ""
-	if m.mode == modeHosts {
-		right = metaStyle.Render("inventory ▸ ") + rowStyle.Render(m.hostTitle)
+	if m.mode == modeMembers {
+		right = metaStyle.Render("inventory ▸ ") + rowStyle.Render(m.members.invName) +
+			metaStyle.Render(" ▸ "+m.members.kind.noun())
 	}
 	return m.spread(left, right)
 }
@@ -263,26 +262,6 @@ func (m Model) listBody() string {
 	}
 	// pad to a stable height so the footer does not jump around
 	b.WriteString(strings.Repeat("\n", max(0, m.tableHeight()-lines+1)))
-	return b.String()
-}
-
-func (m Model) hostsBody() string {
-	var b strings.Builder
-	hosts := fmt.Sprintf("%d hosts", len(m.hostRows))
-	if m.hostCount > len(m.hostRows) {
-		hosts = fmt.Sprintf("%d of %d hosts", len(m.hostRows), m.hostCount)
-	}
-	b.WriteString(m.spread(dimStyle.Render("esc to go back"), dimStyle.Render(hosts)))
-	b.WriteString("\n")
-	h := m.tableHeight()
-	if m.hostLoading {
-		b.WriteString("\n  " + m.spin.View() + dimStyle.Render(" fetching hosts…"))
-		b.WriteString(strings.Repeat("\n", max(0, h-1)))
-		return b.String()
-	}
-	table := renderTable(hostColumns, m.hostRows, m.hostCursor, m.hostOffset, m.width-1, h)
-	b.WriteString(table)
-	b.WriteString(strings.Repeat("\n", max(0, h-countLines(table)+1)))
 	return b.String()
 }
 
@@ -574,7 +553,8 @@ func (m Model) helpModal() string {
 		{"/", "search (esc clears)"},
 		{"enter", "launch · open job output · project or inventory details · in job details: its output"},
 		{"s", "sync: SCM update a project · update an inventory's sources"},
-		{"h", "in inventory details: list its hosts"},
+		{"h / g", "in inventory details: list its hosts / groups — space to select, enter to use as the launch limit"},
+		{"x", "in inventory details: clear a pending limit selection"},
 		{"a", "in inventory details: launch an ad hoc command"},
 		{"p", "pin the highlighted record, or the run whose output or details are open"},
 		{"f", "narrow what a list shows · follow job output"},
@@ -601,12 +581,17 @@ func (m Model) statusView() string {
 		keys = plainKeys([][2]string{{"r", "retry"}, {"esc", "close"}})
 	case modeInstances:
 		keys = plainKeys([][2]string{{"↑↓", "choose"}, {"enter", "switch"}, {"esc", "cancel"}})
-	case modeHosts:
-		keys = plainKeys([][2]string{{"↑↓", "move"}, {"esc", "back"}, {"?", "help"}, {"q", "quit"}})
+	case modeMembers:
+		keys = plainKeys([][2]string{{"↑↓", "move"}, {"space", "select"}, {"a", "all"}, {"c", "none"},
+			{"enter", "use as limit"}, {"esc", "back"}, {"?", "help"}})
 	case modeProject:
 		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
 	case modeInventory:
-		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"h", "hosts"}, {"a", "ad hoc"}, {"s", "sync all"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
+		invKeys := [][2]string{{"↑↓", "scroll"}, {"h", "hosts"}, {"g", "groups"}, {"a", "ad hoc"}, {"s", "sync all"}, {"r", "reload"}}
+		if m.limitSel.inventoryID == m.inventory.inventory.ID {
+			invKeys = append(invKeys, [2]string{"x", "clear limit"})
+		}
+		keys = plainKeys(append(invKeys, [2]string{"esc", "back"}, [2]string{"?", "help"}))
 	case modeSchedule:
 		toggle := "disable"
 		if !m.schedule.schedule.Enabled {

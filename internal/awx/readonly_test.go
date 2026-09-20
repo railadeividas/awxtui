@@ -57,6 +57,9 @@ func TestReadOnlyRefusesWrites(t *testing.T) {
 	if _, err := c.Jobs(ctx, "", ""); err != nil {
 		t.Errorf("Jobs: %v", err)
 	}
+	if _, err := c.Groups(ctx, 3, "", ""); err != nil {
+		t.Errorf("Groups: %v", err)
+	}
 	for _, m := range methods {
 		if m[:4] != "GET " {
 			t.Errorf("unexpected non-GET request: %s", m)

@@ -217,6 +217,14 @@ func mockAWX(t *testing.T) *mock {
 				"inventory": map[string]any{"name": "all"},
 				"last_job":  map[string]any{"id": 41, "status": "failed"},
 			},
+		}, map[string]any{
+			// Its own default limit is non-empty, unlike 7 and 8: it must never
+			// be overwritten by a members-view selection.
+			"id": 9, "name": "Restart nginx", "job_type": "run", "playbook": "restart.yml",
+			"summary_fields": map[string]any{
+				"project":   map[string]any{"name": "infra"},
+				"inventory": map[string]any{"name": "production"},
+			},
 		}})...))
 	})
 	mux.HandleFunc("/api/v2/jobs/", func(w http.ResponseWriter, r *http.Request) {
@@ -356,6 +364,21 @@ func mockAWX(t *testing.T) *mock {
 	}
 	mux.HandleFunc("/api/v2/job_templates/7/launch/", launch(7, false))
 	mux.HandleFunc("/api/v2/job_templates/8/launch/", launch(8, true))
+	mux.HandleFunc("/api/v2/job_templates/9/launch/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"detail":"not implemented for this test"}`, http.StatusNotImplemented)
+			return
+		}
+		write(w, map[string]any{
+			"can_start_without_user_input": true,
+			"ask_limit_on_launch":          true,
+			"ask_variables_on_launch":      false,
+			"defaults": map[string]any{
+				"limit": "custom-limit", "inventory": map[string]any{"id": 3, "name": "production"},
+				"extra_vars": "{}",
+			},
+		})
+	})
 	mux.HandleFunc("/api/v2/job_templates/8/survey_spec/", func(w http.ResponseWriter, r *http.Request) {
 		one, ten := 1, 10
 		write(w, map[string]any{"name": "Deploy options", "spec": []any{
@@ -435,6 +458,12 @@ func mockAWX(t *testing.T) *mock {
 		write(w, page(
 			map[string]any{"id": 11, "name": "web-01", "enabled": true, "description": "frontend"},
 			map[string]any{"id": 12, "name": "db-01", "enabled": true, "has_active_failures": true},
+		))
+	})
+	mux.HandleFunc("/api/v2/inventories/3/groups/", func(w http.ResponseWriter, r *http.Request) {
+		write(w, page(
+			map[string]any{"id": 21, "name": "web", "description": "frontend hosts"},
+			map[string]any{"id": 22, "name": "db", "description": "database hosts"},
 		))
 	})
 	mux.HandleFunc("/api/v2/projects/", func(w http.ResponseWriter, r *http.Request) {
@@ -899,8 +928,8 @@ func TestFlows(t *testing.T) {
 	if m.user != "admin" {
 		t.Fatalf("expected connected user admin, got %q (err: %v)", m.user, m.err)
 	}
-	if got := len(m.rows[tabTemplates]); got != 2 {
-		t.Fatalf("expected 2 templates, got %d (err: %v)", got, m.err)
+	if got := len(m.rows[tabTemplates]); got != 3 {
+		t.Fatalf("expected 3 templates, got %d (err: %v)", got, m.err)
 	}
 	show(t, "templates", m.View())
 
@@ -956,8 +985,8 @@ func TestFlows(t *testing.T) {
 	}
 	show(t, "inventory details", m.View())
 	m = step(t, m, key("h"))
-	if m.mode != modeHosts || len(m.hostRows) != 2 {
-		t.Fatalf("expected 2 hosts in drill-down, got mode %v rows %d (err %v)", m.mode, len(m.hostRows), m.err)
+	if m.mode != modeMembers || len(m.members.rows) != 2 {
+		t.Fatalf("expected 2 hosts in drill-down, got mode %v rows %d (err %v)", m.mode, len(m.members.rows), m.err)
 	}
 	show(t, "hosts", m.View())
 
@@ -1038,7 +1067,7 @@ func TestEveryViewRendersWithinTerminalBounds(t *testing.T) {
 		m := New(awx.New(srv.URL, "test-token", false))
 		m = step(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = step(t, m, m.connect())
-		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "esc", "3", "enter", "a", "esc", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc", "6", "enter", "G", "esc", "2", "f", "down", "right", "right", "space", "down", "enter", "2", "f", "d", "e", "p", "l", "o", "y", "esc", "G", "enter", "esc"} {
+		for _, k := range []string{"1", "2", "d", "esc", "m", "p", "m", "3", "enter", "h", "space", "esc", "3", "enter", "g", "space", "enter", "3", "enter", "x", "esc", "3", "enter", "a", "esc", "4", "?", "4", "enter", "G", "esc", "5", "enter", "t", "esc", "6", "enter", "G", "esc", "2", "f", "down", "right", "right", "space", "down", "enter", "2", "f", "d", "e", "p", "l", "o", "y", "esc", "G", "enter", "esc"} {
 			m = step(t, m, key(k))
 			out := m.View()
 			for i, line := range strings.Split(out, "\n") {

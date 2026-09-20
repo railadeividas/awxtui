@@ -930,6 +930,38 @@ func (c *Client) Hosts(ctx context.Context, inventoryID int, pageURL, search str
 		listURL(fmt.Sprintf("/api/v2/inventories/%d/hosts/", inventoryID), "name", PageSize, search)))
 }
 
+// Group is a node in an inventory's host-group tree. AWX's own object carries
+// variables and a related-links block for children/parents/hosts, but
+// nothing here reads past name and description, so nothing else is decoded.
+type Group struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// Groups returns a page of an inventory's groups.
+func (c *Client) Groups(ctx context.Context, inventoryID int, pageURL, search string) (Page[Group], error) {
+	return listPage[Group](ctx, c, firstOr(pageURL,
+		listURL(fmt.Sprintf("/api/v2/inventories/%d/groups/", inventoryID), "name", PageSize, search)))
+}
+
+// previewPageSize bounds the two small fetches the inventory details modal
+// makes to show a few host and group names inline, alongside the counts it
+// already had — enough to be useful, cheap enough to fetch on every open.
+const previewPageSize = 8
+
+// FirstHosts returns just the first previewPageSize hosts of an inventory,
+// for the details modal's inline preview. Page.Count still reports the true
+// total, so the modal can say "and N more" without a second request.
+func (c *Client) FirstHosts(ctx context.Context, inventoryID int) (Page[Host], error) {
+	return listPage[Host](ctx, c, listURL(fmt.Sprintf("/api/v2/inventories/%d/hosts/", inventoryID), "name", previewPageSize, ""))
+}
+
+// FirstGroups is FirstHosts for groups.
+func (c *Client) FirstGroups(ctx context.Context, inventoryID int) (Page[Group], error) {
+	return listPage[Group](ctx, c, listURL(fmt.Sprintf("/api/v2/inventories/%d/groups/", inventoryID), "name", previewPageSize, ""))
+}
+
 // Cancel requests cancellation of a running job, project update or sync.
 func (c *Client) Cancel(ctx context.Context, res Resource, id int) error {
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v2/%s/%d/cancel/", res, id), strings.NewReader("{}"), nil)

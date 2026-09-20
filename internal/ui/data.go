@@ -62,12 +62,6 @@ type (
 		err     error
 		gen     int
 	}
-	hostsMsg struct {
-		pageMeta
-		inventory   string
-		inventoryID int
-		hosts       []awx.Host
-	}
 	// searchTickMsg fires after the user stops typing, so a search is sent
 	// once rather than on every keystroke.
 	searchTickMsg struct {
@@ -101,6 +95,11 @@ type (
 		environments     []awx.ExecutionEnvironment
 		instanceGroups   []awx.InstanceGroup
 		labels           []awx.Label
+		// limit is a host/group selection made in the members view before
+		// this launch, offered as the limit field's default when the
+		// template has none of its own. Empty when no selection applies —
+		// either none was made, or it targeted a different inventory.
+		limit string
 	}
 	// adHocFormMsg carries what the ad hoc launch form needs: the inventory
 	// it will run against, chosen before this fetch even starts, and the
@@ -109,6 +108,9 @@ type (
 		gen         int
 		inventory   awx.Inventory
 		credentials []awx.Credential
+		// limit is the members-view selection for this same inventory, if
+		// any — see launchFormMsg.limit.
+		limit string
 	}
 	canceledMsg struct {
 		id  int
@@ -348,22 +350,6 @@ func searchDebounce(t tab, seq int) tea.Cmd {
 	})
 }
 
-func (m *Model) fetchHosts(inventoryID int, name, pageURL string, cont bool) tea.Cmd {
-	c, gen := m.client, m.gen
-	return m.request(func() tea.Msg {
-		ctx, cancel := cmdCtx()
-		defer cancel()
-		p, err := c.Hosts(ctx, inventoryID, pageURL, "")
-		if err != nil {
-			return errMsg{err: err, gen: gen, tab: tabCount}
-		}
-		return hostsMsg{
-			pageMeta:  pageMeta{next: p.Next, count: p.Count, cont: cont, gen: gen},
-			inventory: name, inventoryID: inventoryID, hosts: p.Results,
-		}
-	})
-}
-
 // fetchOutput reads the output of a run. A finished one is fetched whole from
 // the /stdout/ endpoint in one request; a running one is tailed through its
 // events, which — unlike /stdout/ — are populated while it runs. Passing
@@ -434,7 +420,7 @@ func (m *Model) launch(templateID int, payload map[string]any) tea.Cmd {
 // ask_*_on_launch prompts, its survey, and an inventory list when the template
 // lets the user choose one.
 func (m *Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
-	c, gen := m.client, m.gen
+	c, gen, sel := m.client, m.gen, m.limitSel
 	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
@@ -443,6 +429,9 @@ func (m *Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 			return errMsg{err: err, gen: gen, tab: tabCount}
 		}
 		msg := launchFormMsg{gen: gen, template: t, config: cfg}
+		if sel.inventoryID != 0 && sel.inventoryID == cfg.Defaults.Inventory.ID {
+			msg.limit = sel.limit()
+		}
 		if cfg.SurveyEnabled {
 			spec, err := c.SurveySpec(ctx, t.ID)
 			if err != nil {
@@ -479,12 +468,16 @@ func (m *Model) fetchLaunchForm(t awx.JobTemplate) tea.Cmd {
 // catalogue the launch form offers: with none loaded the form falls back to
 // typing a credential id.
 func (m *Model) fetchAdHocForm(inv awx.Inventory) tea.Cmd {
-	c, gen := m.client, m.gen
+	c, gen, sel := m.client, m.gen, m.limitSel
 	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
 		creds, _ := c.AllAdHocCredentials(ctx, maxPages)
-		return adHocFormMsg{gen: gen, inventory: inv, credentials: creds}
+		msg := adHocFormMsg{gen: gen, inventory: inv, credentials: creds}
+		if sel.inventoryID != 0 && sel.inventoryID == inv.ID {
+			msg.limit = sel.limit()
+		}
+		return msg
 	})
 }
 
@@ -518,7 +511,7 @@ func (m *Model) launchWorkflow(templateID int, payload map[string]any) tea.Cmd {
 // It never asks for a credential, execution environment, job type or
 // verbosity — those belong to the workflow's nodes, not the workflow itself.
 func (m *Model) fetchWorkflowLaunchForm(t awx.WorkflowJobTemplate) tea.Cmd {
-	c, gen := m.client, m.gen
+	c, gen, sel := m.client, m.gen, m.limitSel
 	return m.request(func() tea.Msg {
 		ctx, cancel := cmdCtx()
 		defer cancel()
@@ -527,6 +520,9 @@ func (m *Model) fetchWorkflowLaunchForm(t awx.WorkflowJobTemplate) tea.Cmd {
 			return errMsg{err: err, gen: gen, tab: tabCount}
 		}
 		msg := launchFormMsg{gen: gen, isWorkflow: true, workflowTemplate: t, config: cfg}
+		if sel.inventoryID != 0 && sel.inventoryID == cfg.Defaults.Inventory.ID {
+			msg.limit = sel.limit()
+		}
 		if cfg.SurveyEnabled {
 			spec, err := c.WorkflowSurveySpec(ctx, t.ID)
 			if err != nil {

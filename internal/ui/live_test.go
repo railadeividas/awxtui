@@ -582,3 +582,80 @@ func TestLiveSchedules(t *testing.T) {
 		m = step(t, m, key("esc"))
 	}
 }
+
+// TestLiveInventoryGroups opens an inventory with real groups and confirms
+// the members view and the details preview both read them correctly. It only
+// ever issues GETs: no group or host is selected past the point of reading
+// m.limitSel back, and neither the ad hoc form nor a template launch form is
+// ever opened, so nothing can be submitted.
+//
+//	AWXTUI_LIVE=1 AWXTUI_SHOW=1 go test -v ./internal/ui -run TestLiveInventoryGroups
+func TestLiveInventoryGroups(t *testing.T) {
+	if os.Getenv("AWXTUI_LIVE") == "" {
+		t.Skip("set AWXTUI_LIVE=1 to run against a real AWX instance")
+	}
+	url, token := os.Getenv("AWX_URL"), os.Getenv("AWX_TOKEN")
+	if url == "" || token == "" {
+		t.Skip("AWX_URL and AWX_TOKEN must be set")
+	}
+
+	m := New(awx.New(url, token, os.Getenv("AWX_INSECURE") != "").ReadOnly())
+	m = step(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = step(t, m, m.connect())
+	if m.err != nil {
+		t.Fatalf("connect failed: %v", m.err)
+	}
+
+	m = step(t, m, key("3"))
+	var target awx.Inventory
+	for _, inv := range m.inventories {
+		if inv.TotalGroups > 0 {
+			target = inv
+			break
+		}
+	}
+	if target.ID == 0 {
+		t.Skip("no inventory on this instance reports any groups")
+	}
+	m = rowAt(t, m, target.Name)
+	m = step(t, m, key("enter"))
+	if m.mode != modeInventory {
+		t.Fatalf("expected inventory details, got mode %v (err %v)", m.mode, m.err)
+	}
+	preview := stripANSI(m.View())
+	t.Logf("%s: %d hosts, %d groups reported; preview:\n%s",
+		target.Name, target.TotalHosts, target.TotalGroups, preview)
+	show(t, "live inventory details with preview", m.View())
+
+	m = step(t, m, key("g"))
+	if m.mode != modeMembers || m.members.kind != memberGroups {
+		t.Fatalf("g did not open the groups view: mode %v (err %v)", m.mode, m.err)
+	}
+	if m.members.count != target.TotalGroups {
+		t.Errorf("groups view reports %d, the inventory row claims %d", m.members.count, target.TotalGroups)
+	}
+	if len(m.members.rows) == 0 {
+		t.Fatalf("groups view loaded nothing for an inventory reporting %d", target.TotalGroups)
+	}
+	t.Logf("%s: first group loaded is %q", target.Name, m.members.names[0])
+	show(t, "live groups view: "+target.Name, m.View())
+
+	// Select the first two loaded groups (or just the one, if that's all
+	// there is) and confirm — GETs only, nothing launched.
+	m = step(t, m, key(" "))
+	if len(m.members.rows) > 1 {
+		m = step(t, m, key("down"))
+		m = step(t, m, key(" "))
+	}
+	m = step(t, m, key("enter"))
+	if m.mode != modeInventory {
+		t.Fatalf("enter after selecting should return to the inventory details, got mode %v", m.mode)
+	}
+	if m.limitSel.inventoryID != target.ID || len(m.limitSel.names) == 0 {
+		t.Fatalf("selecting groups did not set a limit for %s: %+v", target.Name, m.limitSel)
+	}
+	t.Logf("%s: limit selection is %q", target.Name, m.limitSel.limit())
+	if !strings.Contains(m.limitSel.limit(), m.members.names[0]) {
+		t.Errorf("limit %q does not contain the first selected group %q", m.limitSel.limit(), m.members.names[0])
+	}
+}

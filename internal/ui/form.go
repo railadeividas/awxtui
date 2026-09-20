@@ -360,7 +360,14 @@ func newForm(src launchFormMsg, width int) form {
 		add(text("scm_branch", "SCM branch", d.SCMBranch, "project default"))
 	}
 	if cfg.AskLimit {
-		add(text("limit", "Limit", d.Limit, "all hosts"))
+		// The template's own default always wins: a host/group picked in the
+		// members view only fills a blank limit, never overrides one the
+		// template already set.
+		def := d.Limit
+		if def == "" {
+			def = src.limit
+		}
+		add(text("limit", "Limit", def, "all hosts"))
 	}
 	if cfg.AskVerbosity {
 		fl := formField{key: "verbosity", label: "Verbosity", kind: fChoice,
@@ -516,7 +523,7 @@ func newAdHocForm(src adHocFormMsg, width int) form {
 
 	f.fields = append(f.fields,
 		formField{key: "module_args", label: "Arguments", kind: fText, input: newInput("", "e.g. name=nginx state=restarted", inputWidth)},
-		formField{key: "limit", label: "Limit", kind: fText, input: newInput("", "all hosts", inputWidth)},
+		formField{key: "limit", label: "Limit", kind: fText, input: newInput(src.limit, "all hosts", inputWidth)},
 		formField{key: "verbosity", label: "Verbosity", kind: fChoice,
 			choices: []string{"0 normal", "1 verbose", "2 more verbose", "3 debug", "4 connection debug"},
 			values:  []string{"0", "1", "2", "3", "4"}},

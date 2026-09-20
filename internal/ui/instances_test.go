@@ -160,8 +160,8 @@ func TestStaleRepliesFromOldInstanceAreDropped(t *testing.T) {
 	if m.err != nil {
 		t.Errorf("stale error was shown: %v", m.err)
 	}
-	m = step(t, m, hostsMsg{pageMeta: pageMeta{gen: oldGen}, inventory: "old"})
-	if m.mode == modeHosts {
+	m = step(t, m, membersMsg{pageMeta: pageMeta{gen: oldGen}, kind: memberHosts, inventory: "old"})
+	if m.mode == modeMembers {
 		t.Error("a stale hosts reply hijacked the view")
 	}
 	m = step(t, m, connectedMsg{user: awx.User{ID: 1, Username: "prod-user"}, gen: oldGen})

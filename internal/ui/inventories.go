@@ -18,6 +18,15 @@ type inventoryDetail struct {
 	sources   []awx.InventorySource
 	loading   bool
 	offset    int
+
+	// preview holds the first few host and group names, shown inline so a
+	// quick check does not always need the dedicated, drill-in members view.
+	hostNames      []string
+	hostTotal      int
+	groupNames     []string
+	groupTotal     int
+	previewLoading bool
+	previewErr     error
 }
 
 // inventorySourcesMsg carries the sources fetched for the inventory details
@@ -28,13 +37,26 @@ type inventorySourcesMsg struct {
 	sources   []awx.InventorySource
 }
 
+// inventoryPreviewMsg carries the first page of an inventory's hosts and
+// groups, fetched alongside its sources so the details modal can name a few
+// of each rather than showing bare counts alone.
+type inventoryPreviewMsg struct {
+	gen         int
+	inventoryID int
+	hostNames   []string
+	hostTotal   int
+	groupNames  []string
+	groupTotal  int
+	err         error
+}
+
 // openInventoryDetail shows the details of the selected inventory and starts
-// the fetch of its sources.
+// the fetch of its sources and its host/group name preview.
 func (m *Model) openInventoryDetail(inv awx.Inventory) tea.Cmd {
 	m.err, m.notice = nil, ""
 	m.mode = modeInventory
-	m.inventory = inventoryDetail{inventory: inv, loading: true}
-	return m.fetchInventorySources(inv)
+	m.inventory = inventoryDetail{inventory: inv, loading: true, previewLoading: true}
+	return tea.Batch(m.fetchInventorySources(inv), m.fetchInventoryPreview(inv))
 }
 
 func (m *Model) fetchInventorySources(inv awx.Inventory) tea.Cmd {
@@ -47,6 +69,39 @@ func (m *Model) fetchInventorySources(inv awx.Inventory) tea.Cmd {
 			return errMsg{err: err, gen: gen, tab: tabCount}
 		}
 		return inventorySourcesMsg{gen: gen, inventory: inv, sources: page.Results}
+	})
+}
+
+// fetchInventoryPreview reads a handful of an inventory's hosts and groups by
+// name. It never fails the details view over this: a preview error is shown
+// on its own line rather than replacing the sources the modal is mainly
+// there for.
+func (m *Model) fetchInventoryPreview(inv awx.Inventory) tea.Cmd {
+	c, gen := m.client, m.gen
+	return m.request(func() tea.Msg {
+		ctx, cancel := cmdCtx()
+		defer cancel()
+		hostPage, err := c.FirstHosts(ctx, inv.ID)
+		if err != nil {
+			return inventoryPreviewMsg{gen: gen, inventoryID: inv.ID, err: err}
+		}
+		groupPage, err := c.FirstGroups(ctx, inv.ID)
+		if err != nil {
+			return inventoryPreviewMsg{gen: gen, inventoryID: inv.ID, err: err}
+		}
+		hostNames := make([]string, len(hostPage.Results))
+		for i, h := range hostPage.Results {
+			hostNames[i] = h.Name
+		}
+		groupNames := make([]string, len(groupPage.Results))
+		for i, g := range groupPage.Results {
+			groupNames[i] = g.Name
+		}
+		return inventoryPreviewMsg{
+			gen: gen, inventoryID: inv.ID,
+			hostNames: hostNames, hostTotal: hostPage.Count,
+			groupNames: groupNames, groupTotal: groupPage.Count,
+		}
 	})
 }
 
@@ -70,7 +125,7 @@ func (m Model) handleInventoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgdown", "ctrl+d":
 		m.inventory.offset = m.clampInventoryOffset(m.inventory.offset + m.inventoryWindow()/2)
 		return m, nil
-	case "home", "g":
+	case "home":
 		m.inventory.offset = 0
 		return m, nil
 	case "end", "G":
@@ -80,17 +135,15 @@ func (m Model) handleInventoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inventory.loading = true
 		return m, m.fetchInventorySources(m.inventory.inventory)
 	case "h":
-		inv := m.inventory.inventory
-		m.inventory = inventoryDetail{}
-		// Switch to the hosts view right away, empty and spinning, rather than
-		// leaving the details modal on screen — stale or half-cleared — until
-		// the request comes back.
-		m.mode = modeHosts
-		m.hostTitle, m.hostInventory = inv.Name, inv.ID
-		m.hostRows, m.hostCursor, m.hostOffset = nil, 0, 0
-		m.hostNext, m.hostCount, m.hostPages = "", 0, 0
-		m.hostLoading = true
-		return m, m.fetchHosts(inv.ID, inv.Name, "", false)
+		return m, m.openMembers(memberHosts, m.inventory.inventory)
+	case "g":
+		return m, m.openMembers(memberGroups, m.inventory.inventory)
+	case "x":
+		if m.limitSel.inventoryID == m.inventory.inventory.ID {
+			m.limitSel = limitSelection{}
+			m.notice = "limit selection cleared"
+		}
+		return m, nil
 	case "a":
 		// Unlike 'h', this stays on the details view rather than switching
 		// right away: there is no ad hoc equivalent of the hosts view to
@@ -159,6 +212,27 @@ func (m Model) inventoryModal() string {
 	return modalStyle.Width(width).Render(b.String())
 }
 
+// previewSuffix renders the "web-01, web-02, … (+82 more · h to browse and
+// select)" text that follows a hosts/groups count, so a quick check does not
+// always need the dedicated members view. key names the key that opens it.
+func previewSuffix(d inventoryDetail, names []string, total int, key string) string {
+	if d.previewLoading {
+		return dimStyle.Render("  loading…")
+	}
+	if d.previewErr != nil {
+		return dimStyle.Render("  could not read names")
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	more := total - len(names)
+	suffix := fmt.Sprintf("  · %s to browse and select", key)
+	if more > 0 {
+		suffix = fmt.Sprintf("  (+%d more%s)", more, suffix)
+	}
+	return dimStyle.Render("  "+strings.Join(names, ", ")) + dimStyle.Render(suffix)
+}
+
 // inventoryBody is the scrollable content of the modal, one string per line.
 func (m Model) inventoryBody(width int) []string {
 	inv := m.inventory.inventory
@@ -184,8 +258,11 @@ func (m Model) inventoryBody(width int) []string {
 	}
 
 	field("organization", rowStyle.Render(inv.SummaryFields.Organization.Name))
-	field("hosts", rowStyle.Render(fmt.Sprintf("%d", inv.TotalHosts)))
-	field("groups", rowStyle.Render(fmt.Sprintf("%d", inv.TotalGroups)))
+	field("hosts", rowStyle.Render(fmt.Sprintf("%d", inv.TotalHosts))+previewSuffix(m.inventory, m.inventory.hostNames, m.inventory.hostTotal, "h"))
+	field("groups", rowStyle.Render(fmt.Sprintf("%d", inv.TotalGroups))+previewSuffix(m.inventory, m.inventory.groupNames, m.inventory.groupTotal, "g"))
+	if sel := m.limitSel; sel.inventoryID == inv.ID {
+		field("limit", rowStyle.Render(sel.limit())+dimStyle.Render("  (x to clear)"))
+	}
 	lines = append(lines, "")
 
 	if m.inventory.loading {

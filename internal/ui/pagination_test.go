@@ -532,19 +532,19 @@ func TestHostsPageInOnDemand(t *testing.T) {
 	m = step(t, m, key("enter"))
 	m = step(t, m, key("h"))
 
-	if m.mode != modeHosts {
-		t.Fatalf("expected the hosts view, got %v (err %v)", m.mode, m.err)
+	if m.mode != modeMembers {
+		t.Fatalf("expected the members view, got %v (err %v)", m.mode, m.err)
 	}
-	if got := len(m.hostRows); got != 200 {
+	if got := len(m.members.rows); got != 200 {
 		t.Fatalf("first hosts page loaded %d rows, want 200", got)
 	}
-	if m.hostCount != 300 {
-		t.Errorf("host count = %d, want 300", m.hostCount)
+	if m.members.count != 300 {
+		t.Errorf("host count = %d, want 300", m.members.count)
 	}
 	for i := 0; i < 200; i++ {
 		m = step(t, m, key("j"))
 	}
-	if got := len(m.hostRows); got != 300 {
+	if got := len(m.members.rows); got != 300 {
 		t.Errorf("after scrolling, %d host rows, want all 300", got)
 	}
 }
