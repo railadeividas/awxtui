@@ -163,13 +163,7 @@ func (m Model) tabsView() string {
 		}
 	}
 	left := strings.Join(parts, "")
-	right := ""
-	if m.mode == modeInventory && m.inventory.focus != focusFields {
-		ml := m.inventory.focusedMembers()
-		right = metaStyle.Render("inventory ▸ ") + rowStyle.Render(ml.invName) +
-			metaStyle.Render(" ▸ "+ml.kind.noun())
-	}
-	return m.spread(left, right)
+	return m.spread(left, "")
 }
 
 // countLabel summarises how much of a list is loaded, and how much of it the
@@ -583,16 +577,8 @@ func (m Model) statusView() string {
 	case modeProject:
 		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
 	case modeInventory:
-		if m.inventory.focus != focusFields {
-			other := "g"
-			if m.inventory.focus == focusGroups {
-				other = "h"
-			}
-			keys = plainKeys([][2]string{{"↑↓", "move"}, {"space", "select"}, {"a", "all"}, {"c", "none"},
-				{"enter", "use as limit"}, {other, "switch"}, {"esc", "collapse"}, {"?", "help"}})
-			break
-		}
-		invKeys := [][2]string{{"↑↓", "scroll"}, {"h", "hosts"}, {"g", "groups"}, {"a", "ad hoc"}, {"s", "sync all"}, {"r", "reload"}}
+		invKeys := [][2]string{{"↑↓", "move"}, {"space", "select"}, {"h", "hosts"}, {"g", "groups"},
+			{"a", "ad hoc"}, {"s", "sync all"}, {"r", "reload"}}
 		if m.limitSel.inventoryID == m.inventory.inventory.ID {
 			invKeys = append(invKeys, [2]string{"x", "clear limit"})
 		}

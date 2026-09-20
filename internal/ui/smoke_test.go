@@ -977,20 +977,18 @@ func TestFlows(t *testing.T) {
 		show(t, "tab "+tabKey, m.View())
 	}
 
-	// inventory drill-down: enter opens details, h expands its hosts inline
+	// inventory drill-down: enter opens details with its hosts and groups
+	// already rendered inline
 	m = step(t, m, key("3"))
 	m = step(t, m, key("enter"))
 	if m.mode != modeInventory {
 		t.Fatalf("expected inventory details, got mode %v (err %v)", m.mode, m.err)
 	}
-	show(t, "inventory details", m.View())
-	m = step(t, m, key("h"))
-	if m.mode != modeInventory || m.inventory.focus != focusHosts || len(m.inventory.hosts.rows) != 2 {
-		t.Fatalf("expected 2 hosts expanded in drill-down, got mode %v focus %v rows %d (err %v)",
-			m.mode, m.inventory.focus, len(m.inventory.hosts.rows), m.err)
+	if len(m.inventory.hosts.rows) != 2 {
+		t.Fatalf("expected 2 hosts in the details view, got mode %v rows %d (err %v)",
+			m.mode, len(m.inventory.hosts.rows), m.err)
 	}
-	show(t, "hosts", m.View())
-	m = step(t, m, key("esc")) // collapse back to the fields view
+	show(t, "inventory details with hosts and groups", m.View())
 
 	// jobs tab: cancel a running job
 	m = step(t, m, key("esc")) // hosts -> inventory details

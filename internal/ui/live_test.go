@@ -584,10 +584,10 @@ func TestLiveSchedules(t *testing.T) {
 }
 
 // TestLiveInventoryGroups opens an inventory with real groups and confirms
-// its details view reads and expands them correctly. It only ever issues
-// GETs: no group or host is selected past the point of reading m.limitSel
-// back, and neither the ad hoc form nor a template launch form is ever
-// opened, so nothing can be submitted.
+// its details view reads both its groups and hosts correctly, inline. It
+// only ever issues GETs: no group or host is selected past the point of
+// reading m.limitSel back, and neither the ad hoc form nor a template
+// launch form is ever opened, so nothing can be submitted.
 //
 //	AWXTUI_LIVE=1 AWXTUI_SHOW=1 go test -v ./internal/ui -run TestLiveInventoryGroups
 func TestLiveInventoryGroups(t *testing.T) {
@@ -622,37 +622,21 @@ func TestLiveInventoryGroups(t *testing.T) {
 	if m.mode != modeInventory {
 		t.Fatalf("expected inventory details, got mode %v (err %v)", m.mode, m.err)
 	}
-	preview := stripANSI(m.View())
-	t.Logf("%s: %d hosts, %d groups reported; preview:\n%s",
-		target.Name, target.TotalHosts, target.TotalGroups, preview)
-	show(t, "live inventory details with preview", m.View())
-
-	m = step(t, m, key("g"))
-	if m.mode != modeInventory || m.inventory.focus != focusGroups {
-		t.Fatalf("g did not expand the groups view: mode %v focus %v (err %v)", m.mode, m.inventory.focus, m.err)
-	}
 	if m.inventory.groups.count != target.TotalGroups {
-		t.Errorf("groups view reports %d, the inventory row claims %d", m.inventory.groups.count, target.TotalGroups)
+		t.Errorf("groups reports %d, the inventory row claims %d", m.inventory.groups.count, target.TotalGroups)
 	}
 	if len(m.inventory.groups.rows) == 0 {
-		t.Fatalf("groups view loaded nothing for an inventory reporting %d", target.TotalGroups)
+		t.Fatalf("groups loaded nothing for an inventory reporting %d", target.TotalGroups)
 	}
-	t.Logf("%s: first group loaded is %q", target.Name, m.inventory.groups.names[0])
-	show(t, "live groups expanded in inventory details: "+target.Name, m.View())
+	t.Logf("%s: %d hosts, %d groups; first group loaded is %q",
+		target.Name, target.TotalHosts, target.TotalGroups, m.inventory.groups.names[0])
+	show(t, "live inventory details with hosts and groups: "+target.Name, m.View())
 
-	// Select the first two loaded groups (or just the one, if that's all
-	// there is) and confirm — GETs only, nothing launched.
+	// Select the cursor's row (the first group, since groups render first)
+	// and confirm the live limit reflects it — GETs only, nothing launched.
 	m = step(t, m, key(" "))
-	if len(m.inventory.groups.rows) > 1 {
-		m = step(t, m, key("down"))
-		m = step(t, m, key(" "))
-	}
-	m = step(t, m, key("enter"))
-	if m.mode != modeInventory || m.inventory.focus != focusFields {
-		t.Fatalf("enter after selecting should collapse back to the details fields, got mode %v focus %v", m.mode, m.inventory.focus)
-	}
 	if m.limitSel.inventoryID != target.ID || len(m.limitSel.names) == 0 {
-		t.Fatalf("selecting groups did not set a limit for %s: %+v", target.Name, m.limitSel)
+		t.Fatalf("selecting the first group did not set a limit for %s: %+v", target.Name, m.limitSel)
 	}
 	t.Logf("%s: limit selection is %q", target.Name, m.limitSel.limit())
 	if !strings.Contains(m.limitSel.limit(), m.inventory.groups.names[0]) {

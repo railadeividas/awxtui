@@ -9,43 +9,63 @@ import (
 	"github.com/railadeividas/awxtui/internal/awx"
 )
 
-// detailFocus says what an inventory's details view currently shows: its own
-// fields, or one of its member lists expanded for browsing and selection.
-// There is no separate page for hosts and groups — they live inside the same
-// details view, entered and left with h/g/esc, so picking one never costs a
-// trip back out to the inventories list.
-type detailFocus int
-
-const (
-	focusFields detailFocus = iota
-	focusHosts
-	focusGroups
-)
-
 // inventoryDetail is the state of the inventory details view. Unlike a
 // project, an inventory carries no sync status of its own — AWX puts that on
 // each inventory source — so opening it needs a follow-up fetch the list
 // itself never has to make. Its hosts and groups are fetched the same way,
-// eagerly, so the fields view can name a few of each and expanding either is
-// instant rather than a fresh, spinning fetch.
+// and rendered right inside the same view — both always visible, both
+// selectable, with a single cursor shared between them (groups first, then
+// hosts) so there is nothing to navigate to or back from.
 type inventoryDetail struct {
 	inventory awx.Inventory
 	sources   []awx.InventorySource
 	loading   bool
-	offset    int
+	offset    int // scroll position over the rendered body
+	cursor    int // selectable-row cursor, combined across groups then hosts
 
-	focus  detailFocus
 	hosts  memberList
 	groups memberList
 }
 
-// focusedMembers is whichever of hosts/groups is currently expanded. Only
-// meaningful when focus != focusFields.
-func (d *inventoryDetail) focusedMembers() *memberList {
-	if d.focus == focusGroups {
-		return &d.groups
+// totalRows is how many selectable rows (groups, then hosts) are currently
+// loaded.
+func (d *inventoryDetail) totalRows() int { return len(d.groups.rows) + len(d.hosts.rows) }
+
+// rowAt resolves a combined cursor index to the list it falls in and its
+// index within that list's currently loaded rows.
+func (d *inventoryDetail) rowAt(i int) (ml *memberList, idx int, ok bool) {
+	if i < 0 {
+		return nil, 0, false
 	}
-	return &d.hosts
+	if i < len(d.groups.rows) {
+		return &d.groups, i, true
+	}
+	j := i - len(d.groups.rows)
+	if j < len(d.hosts.rows) {
+		return &d.hosts, j, true
+	}
+	return nil, 0, false
+}
+
+// currentLimit derives the limit selection live from whatever is currently
+// checked across groups and hosts. There is no separate "confirm" step —
+// toggling a row's checkbox with space is the whole action.
+func (d *inventoryDetail) currentLimit() limitSelection {
+	var names []string
+	for i, r := range d.groups.rows {
+		if d.groups.chosen[r.id] {
+			names = append(names, d.groups.names[i])
+		}
+	}
+	for i, r := range d.hosts.rows {
+		if d.hosts.chosen[r.id] {
+			names = append(names, d.hosts.names[i])
+		}
+	}
+	if len(names) == 0 {
+		return limitSelection{}
+	}
+	return limitSelection{inventoryID: d.inventory.ID, names: names}
 }
 
 // inventorySourcesMsg carries the sources fetched for the inventory details
@@ -57,7 +77,8 @@ type inventorySourcesMsg struct {
 }
 
 // openInventoryDetail shows the details of the selected inventory and starts
-// fetching its sources plus the first page of its hosts and groups.
+// fetching its sources plus the first page of its hosts and groups — all
+// three render in the same view, so all three are fetched up front.
 func (m *Model) openInventoryDetail(inv awx.Inventory) tea.Cmd {
 	m.err, m.notice = nil, ""
 	m.mode = modeInventory
@@ -86,12 +107,10 @@ func (m *Model) fetchInventorySources(inv awx.Inventory) tea.Cmd {
 	})
 }
 
-// loadMoreMembers pulls the next page of whichever of hosts/groups is
-// expanded, once the cursor nears the end of what is loaded — capped by
-// maxPages like every other lazy list.
-func (m *Model) loadMoreMembers() tea.Cmd {
-	ml := m.inventory.focusedMembers()
-	if ml.next == "" || ml.pages >= maxPages || len(ml.rows)-ml.cursor > loadMoreWithin {
+// loadMoreMembers pulls ml's next page, capped by maxPages like every other
+// lazy list here.
+func (m *Model) loadMoreMembers(ml *memberList) tea.Cmd {
+	if ml.next == "" || ml.pages >= maxPages {
 		return nil
 	}
 	ml.pages++
@@ -100,10 +119,29 @@ func (m *Model) loadMoreMembers() tea.Cmd {
 	return m.fetchMembers(ml.kind, ml.inventory, ml.invName, next, true)
 }
 
-func (m Model) handleInventoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.inventory.focus != focusFields {
-		return m.handleInventoryMembersKey(msg)
+// moveInventoryCursor moves the cursor shared by the groups and hosts lists,
+// paging in more of whichever one it approaches the end of, and scrolls the
+// details view to keep it visible.
+func (m *Model) moveInventoryCursor(delta int) tea.Cmd {
+	d := &m.inventory
+	n := d.totalRows()
+	d.cursor = clamp(d.cursor+delta, 0, max(n-1, 0))
+	m.syncInventoryOffset()
+	if ml, idx, ok := d.rowAt(d.cursor); ok && len(ml.rows)-idx <= loadMoreWithin {
+		return m.loadMoreMembers(ml)
 	}
+	return nil
+}
+
+// syncInventoryOffset scrolls the groups/hosts body so the cursor's row
+// stays visible, the same way clampInventoryOffset keeps a plain scroll in
+// range.
+func (m *Model) syncInventoryOffset() {
+	_, body, cursorLine := m.inventoryBody(m.inventoryWidth())
+	m.inventory.offset = clampOffset(cursorLine, m.inventory.offset, m.inventoryBodyWindow(), len(body))
+}
+
+func (m Model) handleInventoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -112,45 +150,55 @@ func (m Model) handleInventoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inventory = inventoryDetail{}
 		return m, nil
 	case "up", "k":
-		m.inventory.offset = m.clampInventoryOffset(m.inventory.offset - 1)
-		return m, nil
+		return m, m.moveInventoryCursor(-1)
 	case "down", "j":
-		m.inventory.offset = m.clampInventoryOffset(m.inventory.offset + 1)
-		return m, nil
+		return m, m.moveInventoryCursor(1)
 	case "pgup", "ctrl+u":
-		m.inventory.offset = m.clampInventoryOffset(m.inventory.offset - m.inventoryWindow()/2)
-		return m, nil
+		return m, m.moveInventoryCursor(-m.inventoryBodyWindow() / 2)
 	case "pgdown", "ctrl+d":
-		m.inventory.offset = m.clampInventoryOffset(m.inventory.offset + m.inventoryWindow()/2)
-		return m, nil
+		return m, m.moveInventoryCursor(m.inventoryBodyWindow() / 2)
 	case "home":
-		m.inventory.offset = 0
-		return m, nil
+		return m, m.moveInventoryCursor(-(1 << 30))
 	case "end", "G":
-		m.inventory.offset = m.clampInventoryOffset(1 << 30)
-		return m, nil
-	case "r":
-		m.inventory.loading = true
-		return m, m.fetchInventorySources(m.inventory.inventory)
-	case "h":
-		m.inventory.focus = focusHosts
-		return m, nil
+		return m, m.moveInventoryCursor(1 << 30)
 	case "g":
-		m.inventory.focus = focusGroups
+		// Jump to the first group — groups render first, so this is the
+		// same as "home", but it is the mnemonic a user reaches for.
+		return m, m.moveInventoryCursor(-(1 << 30))
+	case "h":
+		// Jump to the first host, wherever the groups list currently ends.
+		m.inventory.cursor = clamp(len(m.inventory.groups.rows), 0, max(m.inventory.totalRows()-1, 0))
+		m.syncInventoryOffset()
 		return m, nil
-	case "x":
-		if m.limitSel.inventoryID == m.inventory.inventory.ID {
-			m.limitSel = limitSelection{}
-			m.notice = "limit selection cleared"
+	case " ":
+		if ml, idx, ok := m.inventory.rowAt(m.inventory.cursor); ok {
+			id := ml.rows[idx].id
+			ml.chosen[id] = !ml.chosen[id]
+			m.limitSel = m.inventory.currentLimit()
 		}
 		return m, nil
+	case "x":
+		m.inventory.hosts.chosen = map[int]bool{}
+		m.inventory.groups.chosen = map[int]bool{}
+		m.limitSel = limitSelection{}
+		return m, nil
+	case "r":
+		inv := m.inventory.inventory
+		m.inventory.loading = true
+		m.inventory.hosts = newMemberList(memberHosts, inv)
+		m.inventory.groups = newMemberList(memberGroups, inv)
+		m.inventory.cursor, m.inventory.offset = 0, 0
+		return m, tea.Batch(
+			m.fetchInventorySources(inv),
+			m.fetchMembers(memberHosts, inv.ID, inv.Name, "", false),
+			m.fetchMembers(memberGroups, inv.ID, inv.Name, "", false),
+		)
 	case "a":
-		// Unlike 'h'/'g', this stays on the details view rather than
-		// expanding right away: there is no ad hoc equivalent of a members
-		// list to expand into, and clearing m.inventory here would render an
-		// empty "Inventory #0" until the credential catalogue lands.
-		// adHocFormMsg is what actually leaves this view, once the form is
-		// ready to show.
+		// Unlike the rest of this view, 'a' stays put rather than changing
+		// anything about it right away: there is no ad hoc equivalent to
+		// switch to, and clearing m.inventory here would render an empty
+		// "Inventory #0" until the credential catalogue lands. adHocFormMsg
+		// is what actually leaves this view, once the form is ready to show.
 		m.err, m.notice = nil, "reading credentials…"
 		return m, m.fetchAdHocForm(m.inventory.inventory)
 	case "s":
@@ -177,190 +225,68 @@ func (m Model) handleInventoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleInventoryMembersKey drives an expanded hosts/groups list: moving the
-// cursor, toggling selection and confirming a limit — all inside the same
-// details view, never switching mode.
-func (m Model) handleInventoryMembersKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	ml := m.inventory.focusedMembers()
-	switch msg.String() {
-	case "ctrl+c":
-		return m, tea.Quit
-	case "esc", "q":
-		m.inventory.focus = focusFields
-		return m, nil
-	case "h":
-		if m.inventory.focus == focusHosts {
-			m.inventory.focus = focusFields
-		} else {
-			m.inventory.focus = focusHosts
-		}
-		return m, nil
-	case "g":
-		if m.inventory.focus == focusGroups {
-			m.inventory.focus = focusFields
-		} else {
-			m.inventory.focus = focusGroups
-		}
-		return m, nil
-	case "up", "k":
-		return m, m.moveCursor(-1)
-	case "down", "j":
-		return m, m.moveCursor(1)
-	case "pgup", "ctrl+u":
-		return m, m.moveCursor(-m.membersWindow() / 2)
-	case "pgdown", "ctrl+d":
-		return m, m.moveCursor(m.membersWindow() / 2)
-	case " ":
-		if ml.cursor < len(ml.rows) {
-			id := ml.rows[ml.cursor].id
-			ml.chosen[id] = !ml.chosen[id]
-		}
-		return m, nil
-	case "a":
-		for _, r := range ml.rows {
-			ml.chosen[r.id] = true
-		}
-		return m, nil
-	case "c":
-		ml.chosen = map[int]bool{}
-		return m, nil
-	case "enter":
-		var names []string
-		for i, r := range ml.rows {
-			if ml.chosen[r.id] {
-				names = append(names, ml.names[i])
-			}
-		}
-		if len(names) == 0 {
-			m.limitSel = limitSelection{}
-		} else {
-			m.limitSel = limitSelection{inventoryID: ml.inventory, names: names}
-			m.notice = "limit: " + m.limitSel.limit()
-		}
-		m.inventory.focus = focusFields
-		return m, nil
-	case "?":
-		m.mode = modeHelp
-		return m, nil
-	}
-	return m, nil
-}
-
-// inventoryWindow is how many body lines the modal can show at once. The
-// modal spends lines on its border, padding, title and key legend.
+// inventoryWindow is how many lines the modal can show at once in total,
+// header and body combined. The modal spends lines on its border, padding,
+// title and key legend.
 func (m Model) inventoryWindow() int {
 	return max(m.tableHeight()-7, 3)
 }
 
-// membersWindow is how many rows an expanded hosts/groups list can show at
-// once, inside the same modal the collapsed details view uses.
-func (m Model) membersWindow() int {
-	return max(m.inventoryWindow()-2, 3)
+// inventoryBodyWindow is how many of those lines are left for the scrolling
+// groups/hosts body once the header (organization, limit, sources — never
+// scrolled, so it stays on screen no matter how far down the lists go) has
+// taken its share.
+func (m Model) inventoryBodyWindow() int {
+	header, _, _ := m.inventoryBody(m.inventoryWidth())
+	// +1 for the blank line inventoryModal always inserts between the
+	// header and the body.
+	return max(m.inventoryWindow()-len(header)-1, 3)
 }
 
 func (m Model) clampInventoryOffset(off int) int {
-	return clamp(off, 0, len(m.inventoryBody(m.inventoryWidth()))-m.inventoryWindow())
+	_, body, _ := m.inventoryBody(m.inventoryWidth())
+	return clamp(off, 0, len(body)-m.inventoryBodyWindow())
 }
 
 func (m Model) inventoryWidth() int {
 	return min(m.width-8, 84)
 }
 
-// inventoryModal renders the inventory details view: either its own fields
-// plus each source's real sync status, or — while a members list is
-// expanded — that list, inside the same modal.
+// inventoryModal renders the details of one inventory: a header of its own
+// fields and each source's real sync status — always fully shown — and,
+// below it, its groups and hosts scrolling on their own so the header never
+// scrolls out of view while browsing a long list.
 func (m Model) inventoryModal() string {
-	if m.inventory.focus != focusFields {
-		return m.inventoryMembersModal()
-	}
 	inv := m.inventory.inventory
 	width := m.inventoryWidth()
-	lines := m.inventoryBody(width)
-	window := m.inventoryWindow()
-	off := clamp(m.inventory.offset, 0, max(len(lines)-window, 0))
-	end := min(off+window, len(lines))
+	header, body, _ := m.inventoryBody(width)
+	window := m.inventoryBodyWindow()
+	off := clamp(m.inventory.offset, 0, max(len(body)-window, 0))
+	end := min(off+window, len(body))
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(fmt.Sprintf("Inventory #%d", inv.ID)) + "  " + rowStyle.Bold(true).Render(inv.Name))
-	if len(lines) > window {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  (%d–%d of %d lines)", off+1, end, len(lines))))
+	if len(body) > window {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  (%d–%d of %d)", off+1, end, len(body))))
 	}
 	b.WriteString("\n\n")
-	b.WriteString(strings.Join(lines[off:end], "\n"))
+	b.WriteString(strings.Join(header, "\n"))
+	if len(header) > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString(strings.Join(body[off:end], "\n"))
 	return modalStyle.Width(width).Render(b.String())
 }
 
-// inventoryMembersModal renders an inventory's hosts or groups expanded for
-// browsing and selection, inside the same modal the collapsed details use —
-// there is no separate page to switch to or back from.
-func (m Model) inventoryMembersModal() string {
-	inv := m.inventory.inventory
-	ml := *m.inventory.focusedMembers()
-	width := m.inventoryWidth()
-	h := m.membersWindow()
-
-	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("Inventory #%d", inv.ID)) + "  " + rowStyle.Bold(true).Render(inv.Name))
-	b.WriteString(dimStyle.Render(" ▸ " + ml.kind.noun()))
-	b.WriteString("\n\n")
-
-	count := fmt.Sprintf("%d %s", len(ml.rows), ml.kind.noun())
-	if ml.count > len(ml.rows) {
-		count = fmt.Sprintf("%d of %d %s", len(ml.rows), ml.count, ml.kind.noun())
-	}
-	if len(ml.chosen) > 0 {
-		count = fmt.Sprintf("%d selected · %s", len(ml.chosen), count)
-	}
-	b.WriteString(dimStyle.Render(count))
-	b.WriteString("\n")
-
-	if ml.loading {
-		b.WriteString("\n  " + m.spin.View() + dimStyle.Render(" fetching "+ml.kind.noun()+"…"))
-		return modalStyle.Width(width).Render(b.String())
-	}
-
-	marked := make([]row, len(ml.rows))
-	for i, r := range ml.rows {
-		cells := append([]string(nil), r.cells...)
-		if ml.chosen[r.id] {
-			cells[0] = "[x] " + cells[0]
-		} else {
-			cells[0] = "[ ] " + cells[0]
-		}
-		marked[i] = row{id: r.id, cells: cells, search: r.search}
-	}
-	// width-6 clears modalStyle's own border and padding, matching the
-	// description wrap elsewhere in this modal; renderTable adds one more
-	// column of its own for the row cursor marker it prepends, so the
-	// budget handed to it must leave room for that too.
-	b.WriteString(renderTable(memberColumns(ml.kind), marked, ml.cursor, ml.offset, width-7, h))
-	return modalStyle.Width(width).Render(b.String())
-}
-
-// fieldPreview renders the "web-01, web-02, … (+82 more · h to browse and
-// select)" text that follows a hosts/groups count, so a quick check does not
-// always need to expand the list. key names the key that expands it.
-func fieldPreview(ml memberList, key string) string {
-	if ml.loading {
-		return dimStyle.Render("  loading…")
-	}
-	if len(ml.names) == 0 {
-		return ""
-	}
-	n := min(len(ml.names), 8)
-	more := ml.count - n
-	suffix := fmt.Sprintf("  · %s to browse and select", key)
-	if more > 0 {
-		suffix = fmt.Sprintf("  (+%d more%s)", more, suffix)
-	}
-	return dimStyle.Render("  "+strings.Join(ml.names[:n], ", ")) + dimStyle.Render(suffix)
-}
-
-// inventoryBody is the scrollable content of the modal's fields view, one
-// string per line.
-func (m Model) inventoryBody(width int) []string {
+// inventoryBody splits the modal's content into a header (organization,
+// limit, sources — short, and never scrolled) and a body (the groups and
+// hosts tables, which can run well past a screen and scroll on their own),
+// plus the line index within body the combined cursor currently sits on
+// (-1 if nothing is loaded to put it on).
+func (m Model) inventoryBody(width int) (header, body []string, cursorLine int) {
 	inv := m.inventory.inventory
 	valueW := max(width-20, 20)
+	cursorLine = -1
 
 	var lines []string
 	field := func(label, value string) {
@@ -380,10 +306,7 @@ func (m Model) inventoryBody(width int) []string {
 		}
 		lines = append(lines, "")
 	}
-
 	field("organization", rowStyle.Render(inv.SummaryFields.Organization.Name))
-	field("hosts", rowStyle.Render(fmt.Sprintf("%d", inv.TotalHosts))+fieldPreview(m.inventory.hosts, "h"))
-	field("groups", rowStyle.Render(fmt.Sprintf("%d", inv.TotalGroups))+fieldPreview(m.inventory.groups, "g"))
 	if sel := m.limitSel; sel.inventoryID == inv.ID {
 		field("limit", rowStyle.Render(sel.limit())+dimStyle.Render("  (x to clear)"))
 	}
@@ -391,16 +314,72 @@ func (m Model) inventoryBody(width int) []string {
 
 	if m.inventory.loading {
 		lines = append(lines, dimStyle.Render("loading sources…"))
-		return lines
-	}
-	if len(m.inventory.sources) == 0 {
+	} else if len(m.inventory.sources) == 0 {
 		lines = append(lines, dimStyle.Render("no sources — hosts were entered by hand"))
-		return lines
+	} else {
+		lines = append(lines, titleStyle.Render("sources"))
+		for _, s := range m.inventory.sources {
+			lines = append(lines, "  "+rowStyle.Render(s.Label())+"  "+statusBadge(s.Status))
+			lines = append(lines, cell("", 18)+dimStyle.Render("last sync ")+stamp(s.LastUpdated))
+		}
 	}
-	lines = append(lines, titleStyle.Render("sources"))
-	for _, s := range m.inventory.sources {
-		lines = append(lines, "  "+rowStyle.Render(s.Label())+"  "+statusBadge(s.Status))
-		lines = append(lines, cell("", 18)+dimStyle.Render("last sync ")+stamp(s.LastUpdated))
+	header = lines
+	lines = nil
+
+	// width-6 clears modalStyle's own border and padding, matching the
+	// description wrap above; renderTable adds one more column of its own
+	// for the row-cursor marker it prepends.
+	tableWidth := width - 7
+	appendMembers := func(ml memberList, localCursor int) {
+		count := fmt.Sprintf("%d %s", len(ml.rows), ml.kind.noun())
+		if ml.count > len(ml.rows) {
+			count = fmt.Sprintf("%d of %d %s", len(ml.rows), ml.count, ml.kind.noun())
+		}
+		if len(ml.chosen) > 0 {
+			count = fmt.Sprintf("%d selected · %s", len(ml.chosen), count)
+		}
+		lines = append(lines, dimStyle.Render(count))
+		if ml.loading {
+			lines = append(lines, dimStyle.Render("  fetching "+ml.kind.noun()+"…"))
+			return
+		}
+		if len(ml.rows) == 0 {
+			lines = append(lines, dimStyle.Render("  none"))
+			return
+		}
+		marked := make([]row, len(ml.rows))
+		for i, r := range ml.rows {
+			cells := append([]string(nil), r.cells...)
+			if ml.chosen[r.id] {
+				cells[0] = "[x] " + cells[0]
+			} else {
+				cells[0] = "[ ] " + cells[0]
+			}
+			marked[i] = row{id: r.id, cells: cells, search: r.search}
+		}
+		table := strings.Split(renderTable(memberColumns(ml.kind), marked, localCursor, 0, tableWidth, len(marked)), "\n")
+		for i, l := range table {
+			// table[0] is the column header; a selected row i>0 is loaded
+			// row i-1, which renderTable highlights when i-1 == localCursor.
+			if localCursor >= 0 && i == localCursor+1 {
+				cursorLine = len(lines)
+			}
+			lines = append(lines, l)
+		}
 	}
-	return lines
+
+	groupsCursor := -1
+	if m.inventory.cursor < len(m.inventory.groups.rows) {
+		groupsCursor = m.inventory.cursor
+	}
+	appendMembers(m.inventory.groups, groupsCursor)
+	lines = append(lines, "")
+
+	hostsCursor := -1
+	if idx := m.inventory.cursor - len(m.inventory.groups.rows); idx >= 0 && idx < len(m.inventory.hosts.rows) {
+		hostsCursor = idx
+	}
+	appendMembers(m.inventory.hosts, hostsCursor)
+
+	return header, lines, cursorLine
 }

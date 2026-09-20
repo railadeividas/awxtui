@@ -103,8 +103,8 @@ AWX has said who you are.
 | `enter` | launch a template or workflow · open job output · open project, inventory or schedule details · for a workflow job: its launch details |
 | `s` | sync: SCM update a project · update an inventory's sources |
 | `t` | on the Schedules tab or a schedule's details: enable or disable it |
-| `h` / `g` | inside inventory details: expand its hosts / groups inline — `space` to select, `a` to select all, `c` to clear, `enter` to use the selection as a launch's limit and collapse back |
-| `x` | inside inventory details: clear a pending limit selection |
+| `h` / `g` | inside inventory details: jump the cursor to its first host / group (both are always listed) — `space` toggles a row into the live limit |
+| `x` | inside inventory details: clear every checked host/group |
 | `a` | inside inventory details: launch an ad hoc command against it |
 | `p` | pin the highlighted record, or the run whose output is open |
 | `f` | narrow the view: pinned only, and on Jobs also owner, status and kind |
@@ -229,23 +229,21 @@ Before AWX groups had any representation here, the only way to target a
 `limit` was to already know a host or group's exact name and type it in
 blind. Opening an inventory's details (`enter`) now fetches its hosts and
 groups (`/api/v2/inventories/{id}/hosts/` and
-`/api/v2/inventories/{id}/groups/`) alongside its sources, and names a
-handful of each inline, next to the counts the view already showed.
+`/api/v2/inventories/{id}/groups/`) alongside its sources, and renders both
+as tables right there in the same view — no separate page, nothing to expand.
 
-`h` and `g` expand the full list of hosts or groups **in the same details
-view** — there is no separate page to navigate to or back from. Expanded,
-`space` toggles a row, `a`/`c` select or clear everything loaded, and `enter`
-stores the picked names and collapses back to the details fields. `esc`
-collapses an expanded list the same way; a second `esc` is what leaves the
-details view entirely.
+A single cursor moves across groups, then hosts (`↑↓`, `h`/`g` to jump
+straight to the first row of either); `space` toggles the row it is on.
+There is no separate "confirm" step — the `limit` line above updates live as
+soon as a row is checked, `:`-joined the way AWX's own limit syntax ORs
+alternatives together, combining whatever is checked across both tables.
+`x` clears every checkbox in both.
 
-That selection is not itself a `limit` field — it only offers a default the
-next time one is asked for, `:`-joined the way AWX's own limit syntax ORs
-alternatives together. It fills the ad hoc form's `limit` (opened with `a`),
-or a job template's, but only when that template's own default is empty and
-its inventory is the one the selection was made against; a template that
-already sets its own default limit always keeps it. `x` on the details
-fields clears a pending selection.
+That live selection is not itself a `limit` field — it only offers a default
+the next time one is asked for. It fills the ad hoc form's `limit` (opened
+with `a`), or a job template's, but only when that template's own default is
+empty and its inventory is the one the selection was made against; a
+template that already sets its own default limit always keeps it.
 
 ## Schedules
 
@@ -464,7 +462,7 @@ that look like a failed load.
 | `internal/ui/output.go` | job output view: find, highlight, failure/task jumps |
 | `internal/ui/jobs.go` | job launch details: what a run was started with |
 | `internal/ui/projects.go` | project details: SCM settings, update flags |
-| `internal/ui/inventories.go` | inventory details: each source's real sync status, its hosts/groups expanded inline for selection |
+| `internal/ui/inventories.go` | inventory details: each source's real sync status, its hosts/groups tables and the combined cursor over them |
 | `internal/ui/members.go` | a hosts/groups list: fetch, paging, the row shape the limit is built from |
 | `internal/ui/schedules.go` | schedule details: rrule, next run, enable/disable |
 | `internal/ui/table.go` | responsive column layout (columns shrink, then drop) |

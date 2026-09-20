@@ -28,25 +28,23 @@ func (k memberKind) noun() string {
 }
 
 // memberList is one inventory's hosts or groups, paged in lazily like every
-// other list here, plus an in-progress multi-select that becomes a launch's
-// default limit once confirmed. It lives on inventoryDetail — expanded and
-// browsed inline rather than as its own page, since it only ever makes sense
-// in the context of the inventory it belongs to.
+// other list here, plus an in-progress multi-select that feeds a launch's
+// default limit. It lives directly on inventoryDetail and renders inline,
+// always alongside the other one — there is no separate cursor or scroll
+// position here, since both lists share the single cursor inventoryDetail
+// keeps for the whole details view.
 type memberList struct {
 	kind      memberKind
 	inventory int
 	invName   string
 	rows      []row
 	names     []string // parallel to rows: the plain name a limit is built from
-	cursor    int
-	offset    int
 	next      string
 	count     int
 	pages     int
 	// loading is true from the moment the inventory details open until this
-	// list's first page lands, so the collapsed preview and the expanded
-	// browser can both show a spinner instead of looking like the inventory
-	// truly has nothing in it.
+	// list's first page lands, so it can show a spinner instead of looking
+	// like the inventory truly has nothing in it.
 	loading bool
 	// chosen marks selected rows by AWX id, surviving pagination and
 	// re-ordering since it is keyed by id rather than row index.

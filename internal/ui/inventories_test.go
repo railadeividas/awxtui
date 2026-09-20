@@ -50,28 +50,10 @@ func TestInventoryDetailsWithoutSources(t *testing.T) {
 	}
 }
 
-// "h" inside the details view expands its hosts inline — no separate page,
-// no mode change, so there is nothing to navigate back out of but the
-// expansion itself.
-func TestInventoryDetailsHKeyExpandsHosts(t *testing.T) {
-	m, _ := openTab(t, "3")
-	m = rowAt(t, m, "production")
-	m = step(t, m, key("enter"))
-	m = step(t, m, key("h"))
-
-	if m.mode != modeInventory || m.inventory.focus != focusHosts {
-		t.Fatalf("h left mode %v focus %v, want modeInventory/focusHosts", m.mode, m.inventory.focus)
-	}
-	if m.inventory.inventory.Name != "production" || len(m.inventory.hosts.rows) == 0 {
-		t.Fatalf("h did not expand production's hosts: inventory %q, rows %d",
-			m.inventory.inventory.Name, len(m.inventory.hosts.rows))
-	}
-}
-
-// Hosts and groups are fetched as soon as the details open, not only once h/g
-// expands them, so both the inline preview and the expansion are ready
-// immediately — no spinner the user has to wait through after pressing h/g.
-func TestInventoryDetailsLoadsMembersUpFront(t *testing.T) {
+// Hosts and groups are fetched as soon as the details open and rendered
+// right there, both at once — no separate page or expand step needed to see
+// or select either one.
+func TestInventoryDetailsShowsHostsAndGroupsInline(t *testing.T) {
 	m, _ := openTab(t, "3")
 	m = rowAt(t, m, "production")
 
@@ -88,32 +70,72 @@ func TestInventoryDetailsLoadsMembersUpFront(t *testing.T) {
 	if settled.inventory.hosts.loading || len(settled.inventory.hosts.rows) == 0 {
 		t.Errorf("hosts never settled: loading=%v rows=%d", settled.inventory.hosts.loading, len(settled.inventory.hosts.rows))
 	}
-	view := stripANSI(settled.View())
-	if !strings.Contains(view, "web-01") {
-		t.Errorf("details view does not preview host names once loaded:\n%s", view)
+	if settled.inventory.groups.loading || len(settled.inventory.groups.rows) == 0 {
+		t.Errorf("groups never settled: loading=%v rows=%d", settled.inventory.groups.loading, len(settled.inventory.groups.rows))
 	}
+	view := stripANSI(settled.View())
+	for _, want := range []string{"web-01", "db-01", "web", "db"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("details view does not show %q inline:\n%s", want, view)
+		}
+	}
+	show(t, "inventory details with hosts and groups", settled.View())
 }
 
-// esc from an expanded hosts/groups list collapses back to the details
-// fields — it takes a second esc to leave the details view entirely.
-func TestMembersEscCollapsesBeforeLeavingDetails(t *testing.T) {
+// The cursor moves across groups first, then hosts, as one combined list —
+// "h" jumps straight to the first host, skipping however many groups there
+// are.
+func TestInventoryCursorMovesAcrossGroupsThenHosts(t *testing.T) {
 	m, _ := openTab(t, "3")
 	m = rowAt(t, m, "production")
 	m = step(t, m, key("enter"))
+
+	if m.inventory.cursor != 0 {
+		t.Fatalf("cursor should start at the first group, got %d", m.inventory.cursor)
+	}
+	nGroups := len(m.inventory.groups.rows)
 	m = step(t, m, key("h"))
-	if m.inventory.focus != focusHosts {
-		t.Fatalf("h left focus %v, want focusHosts", m.inventory.focus)
+	if m.inventory.cursor != nGroups {
+		t.Fatalf("h should jump the cursor to the first host (index %d), got %d", nGroups, m.inventory.cursor)
+	}
+}
+
+// Space toggles the row under the cursor and immediately updates the live
+// limit selection — there is no separate confirm step.
+func TestSpaceTogglesRowAndUpdatesLimitLive(t *testing.T) {
+	m, _ := openTab(t, "3")
+	m = rowAt(t, m, "production")
+	m = step(t, m, key("enter"))
+	firstGroupName := m.inventory.groups.names[0]
+
+	m = step(t, m, key(" "))
+	if m.limitSel.inventoryID != 3 || m.limitSel.limit() != firstGroupName {
+		t.Fatalf("space did not select the first group live: %+v", m.limitSel)
 	}
 
-	m = step(t, m, key("esc"))
-	if m.mode != modeInventory || m.inventory.focus != focusFields {
-		t.Fatalf("esc from hosts left mode %v focus %v, want details fields for production",
-			m.mode, m.inventory.focus)
+	m = step(t, m, key(" ")) // toggle back off
+	if m.limitSel.inventoryID != 0 {
+		t.Fatalf("second space should have cleared the selection, got %+v", m.limitSel)
+	}
+}
+
+// "x" clears every checkbox across both lists, not just the derived limit.
+func TestXClearsBothLists(t *testing.T) {
+	m, _ := openTab(t, "3")
+	m = rowAt(t, m, "production")
+	m = step(t, m, key("enter"))
+	m = step(t, m, key(" "))
+	m = step(t, m, key("h"))
+	m = step(t, m, key(" "))
+	if len(m.inventory.groups.chosen) == 0 || len(m.inventory.hosts.chosen) == 0 {
+		t.Fatalf("expected a selection in both lists before clearing: groups=%v hosts=%v",
+			m.inventory.groups.chosen, m.inventory.hosts.chosen)
 	}
 
-	m = step(t, m, key("esc"))
-	if m.mode != modeList {
-		t.Fatalf("esc from details left mode %v, want the list", m.mode)
+	m = step(t, m, key("x"))
+	if len(m.inventory.groups.chosen) != 0 || len(m.inventory.hosts.chosen) != 0 || m.limitSel.inventoryID != 0 {
+		t.Fatalf("x did not clear both lists: groups=%v hosts=%v limitSel=%+v",
+			m.inventory.groups.chosen, m.inventory.hosts.chosen, m.limitSel)
 	}
 }
 
@@ -130,8 +152,8 @@ func TestInventoryLegendMatchesBehaviour(t *testing.T) {
 		t.Fatalf("enter did not open the details view, mode %v", m.mode)
 	}
 	got := stripANSI(m.statusView())
-	if !strings.Contains(got, "scroll") {
-		t.Errorf("details legend does not mention scrolling: %q", got)
+	if !strings.Contains(got, "move") {
+		t.Errorf("details legend does not mention moving the cursor: %q", got)
 	}
 	if !strings.Contains(got, "hosts") {
 		t.Errorf("details legend does not mention hosts: %q", got)

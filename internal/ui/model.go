@@ -246,13 +246,6 @@ func (m Model) tableHeight() int {
 }
 
 func (m *Model) moveCursor(delta int) tea.Cmd {
-	if m.mode == modeInventory && m.inventory.focus != focusFields {
-		ml := m.inventory.focusedMembers()
-		n := len(ml.rows)
-		ml.cursor = clamp(ml.cursor+delta, 0, n-1)
-		ml.offset = clampOffset(ml.cursor, ml.offset, m.membersWindow(), n)
-		return m.loadMoreMembers()
-	}
 	n := len(m.visible(m.active))
 	m.cursor[m.active] = clamp(m.cursor[m.active]+delta, 0, n-1)
 	m.offset[m.active] = clampOffset(m.cursor[m.active], m.offset[m.active], m.tableHeight(), n)
@@ -660,7 +653,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			target.rows = rows
 			target.names = names
-			target.cursor, target.offset = 0, 0
 			target.pages = 1
 		}
 		return m, nil

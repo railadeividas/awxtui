@@ -527,9 +527,9 @@ func TestPageCapStopsRunawayPagination(t *testing.T) {
 	}
 }
 
-// Opening a large inventory's details pages its hosts in as well, and
-// expanding them (h) scrolls through what is already loaded plus whatever
-// scrolling further pages in.
+// Opening a large inventory's details pages its hosts in as well, and moving
+// the cursor down through them pages in the rest as it approaches the end of
+// what is loaded.
 func TestHostsPageInOnDemand(t *testing.T) {
 	p := newPagedMock(t, 1, 1, 300)
 	m := pagedModel(t, p, 120, 30)
@@ -546,10 +546,7 @@ func TestHostsPageInOnDemand(t *testing.T) {
 		t.Errorf("host count = %d, want 300", m.inventory.hosts.count)
 	}
 
-	m = step(t, m, key("h"))
-	if m.inventory.focus != focusHosts {
-		t.Fatalf("h left focus %v, want focusHosts", m.inventory.focus)
-	}
+	m = step(t, m, key("h")) // jump the cursor to the first host
 	for i := 0; i < 200; i++ {
 		m = step(t, m, key("j"))
 	}
