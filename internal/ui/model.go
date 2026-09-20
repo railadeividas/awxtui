@@ -36,7 +36,6 @@ const (
 	modeFilter
 	modeOutput
 	modeLaunch
-	modeMembers
 	modeHelp
 	modeError
 	modeInstances
@@ -145,9 +144,9 @@ type Model struct {
 	outputRetries int
 	follow        bool
 
-	// inventory drill-down: an inventory's hosts or groups, browsed and
-	// multi-selected to build a launch's default limit.
-	members  memberList
+	// limitSel is a host/group selection made inside an inventory's details,
+	// waiting for the next launch form against that inventory to use as its
+	// limit default.
 	limitSel limitSelection
 
 	// launch form for the selected template
@@ -247,10 +246,11 @@ func (m Model) tableHeight() int {
 }
 
 func (m *Model) moveCursor(delta int) tea.Cmd {
-	if m.mode == modeMembers {
-		n := len(m.members.rows)
-		m.members.cursor = clamp(m.members.cursor+delta, 0, n-1)
-		m.members.offset = clampOffset(m.members.cursor, m.members.offset, m.tableHeight(), n)
+	if m.mode == modeInventory && m.inventory.focus != focusFields {
+		ml := m.inventory.focusedMembers()
+		n := len(ml.rows)
+		ml.cursor = clamp(ml.cursor+delta, 0, n-1)
+		ml.offset = clampOffset(ml.cursor, ml.offset, m.membersWindow(), n)
 		return m.loadMoreMembers()
 	}
 	n := len(m.visible(m.active))
@@ -642,23 +642,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case membersMsg:
-		if msg.gen != m.gen || msg.kind != m.members.kind || msg.inventoryID != m.members.inventory {
+		if msg.gen != m.gen || msg.inventoryID != m.inventory.inventory.ID {
 			return m, nil
 		}
-		m.mode = modeMembers
-		m.members.loading = false
-		m.members.invName = msg.inventory
-		m.members.next = msg.next
-		m.members.count = msg.count
+		target := &m.inventory.hosts
+		if msg.kind == memberGroups {
+			target = &m.inventory.groups
+		}
+		target.loading = false
+		target.invName = msg.inventory
+		target.next = msg.next
+		target.count = msg.count
 		rows, names := memberRows(msg.kind, msg.hosts, msg.groups)
 		if msg.cont {
-			m.members.rows = append(m.members.rows, rows...)
-			m.members.names = append(m.members.names, names...)
+			target.rows = append(target.rows, rows...)
+			target.names = append(target.names, names...)
 		} else {
-			m.members.rows = rows
-			m.members.names = names
-			m.members.cursor, m.members.offset = 0, 0
-			m.members.pages = 1
+			target.rows = rows
+			target.names = names
+			target.cursor, target.offset = 0, 0
+			target.pages = 1
 		}
 		return m, nil
 
@@ -668,18 +671,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.inventory.sources = msg.sources
 		m.inventory.loading = false
-		return m, nil
-
-	case inventoryPreviewMsg:
-		if msg.gen != m.gen || msg.inventoryID != m.inventory.inventory.ID {
-			return m, nil
-		}
-		m.inventory.previewLoading = false
-		m.inventory.previewErr = msg.err
-		if msg.err == nil {
-			m.inventory.hostNames, m.inventory.hostTotal = msg.hostNames, msg.hostTotal
-			m.inventory.groupNames, m.inventory.groupTotal = msg.groupNames, msg.groupTotal
-		}
 		return m, nil
 
 	case jobDetailMsg:
@@ -780,7 +771,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.syncing = false
-		m.members.loading = false
+		m.inventory.hosts.loading = false
+		m.inventory.groups.loading = false
 		m.err = msg.err
 		if msg.tab < tabCount {
 			m.fetching[msg.tab], m.searching[msg.tab] = false, false
@@ -958,9 +950,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case modeOutput:
 		return m.handleOutputKey(msg)
-
-	case modeMembers:
-		return m.handleMembersKey(msg)
 	}
 
 	// modeList

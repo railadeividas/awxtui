@@ -90,8 +90,6 @@ func (m Model) View() string {
 		b.WriteString(m.pane(m.showModal()))
 	case modePick:
 		b.WriteString(m.pane(m.pickerModal()))
-	case modeMembers:
-		b.WriteString(m.membersBody())
 	default:
 		b.WriteString(m.listBody())
 	}
@@ -158,7 +156,7 @@ func (m Model) tabsView() string {
 	parts := make([]string, 0, tabCount)
 	for t := tab(0); t < tabCount; t++ {
 		label := fmt.Sprintf("%d %s", t+1, tabNames[t])
-		if t == m.active && m.mode != modeMembers {
+		if t == m.active {
 			parts = append(parts, tabActiveStyle.Render(label))
 		} else {
 			parts = append(parts, tabStyle.Render(label))
@@ -166,9 +164,10 @@ func (m Model) tabsView() string {
 	}
 	left := strings.Join(parts, "")
 	right := ""
-	if m.mode == modeMembers {
-		right = metaStyle.Render("inventory ▸ ") + rowStyle.Render(m.members.invName) +
-			metaStyle.Render(" ▸ "+m.members.kind.noun())
+	if m.mode == modeInventory && m.inventory.focus != focusFields {
+		ml := m.inventory.focusedMembers()
+		right = metaStyle.Render("inventory ▸ ") + rowStyle.Render(ml.invName) +
+			metaStyle.Render(" ▸ "+ml.kind.noun())
 	}
 	return m.spread(left, right)
 }
@@ -581,12 +580,18 @@ func (m Model) statusView() string {
 		keys = plainKeys([][2]string{{"r", "retry"}, {"esc", "close"}})
 	case modeInstances:
 		keys = plainKeys([][2]string{{"↑↓", "choose"}, {"enter", "switch"}, {"esc", "cancel"}})
-	case modeMembers:
-		keys = plainKeys([][2]string{{"↑↓", "move"}, {"space", "select"}, {"a", "all"}, {"c", "none"},
-			{"enter", "use as limit"}, {"esc", "back"}, {"?", "help"}})
 	case modeProject:
 		keys = plainKeys([][2]string{{"↑↓", "scroll"}, {"s", "sync"}, {"r", "reload"}, {"esc", "back"}, {"?", "help"}})
 	case modeInventory:
+		if m.inventory.focus != focusFields {
+			other := "g"
+			if m.inventory.focus == focusGroups {
+				other = "h"
+			}
+			keys = plainKeys([][2]string{{"↑↓", "move"}, {"space", "select"}, {"a", "all"}, {"c", "none"},
+				{"enter", "use as limit"}, {other, "switch"}, {"esc", "collapse"}, {"?", "help"}})
+			break
+		}
 		invKeys := [][2]string{{"↑↓", "scroll"}, {"h", "hosts"}, {"g", "groups"}, {"a", "ad hoc"}, {"s", "sync all"}, {"r", "reload"}}
 		if m.limitSel.inventoryID == m.inventory.inventory.ID {
 			invKeys = append(invKeys, [2]string{"x", "clear limit"})

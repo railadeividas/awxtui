@@ -9,31 +9,32 @@ import (
 	"github.com/railadeividas/awxtui/internal/awx"
 )
 
-// "g" in an inventory's details is the only way to reach its groups, the
-// same way "h" reaches its hosts — AWX groups were entirely unrepresented in
-// the UI before this.
-func TestInventoryDetailsGKeyOpensGroups(t *testing.T) {
+// "g" in an inventory's details expands its groups inline, the same way "h"
+// expands its hosts — AWX groups were entirely unrepresented in the UI
+// before this, and neither one is a separate page to navigate to.
+func TestInventoryDetailsGKeyExpandsGroups(t *testing.T) {
 	m, _ := openTab(t, "3")
 	m = rowAt(t, m, "production")
 	m = step(t, m, key("enter"))
 	m = step(t, m, key("g"))
 
-	if m.mode != modeMembers || m.members.kind != memberGroups {
-		t.Fatalf("g in inventory details left mode %v kind %v, want modeMembers/memberGroups", m.mode, m.members.kind)
+	if m.mode != modeInventory || m.inventory.focus != focusGroups {
+		t.Fatalf("g in inventory details left mode %v focus %v, want modeInventory/focusGroups", m.mode, m.inventory.focus)
 	}
-	if m.members.invName != "production" || len(m.members.rows) == 0 {
-		t.Fatalf("g did not open production's groups: title %q, rows %d", m.members.invName, len(m.members.rows))
+	if m.inventory.inventory.Name != "production" || len(m.inventory.groups.rows) == 0 {
+		t.Fatalf("g did not expand production's groups: inventory %q, rows %d",
+			m.inventory.inventory.Name, len(m.inventory.groups.rows))
 	}
 	view := stripANSI(m.View())
 	if !strings.Contains(view, "web") || !strings.Contains(view, "db") {
 		t.Errorf("groups view is missing the mock's group names:\n%s", view)
 	}
-	show(t, "groups view", m.View())
+	show(t, "groups expanded in inventory details", m.View())
 }
 
-// The details modal should name a few hosts and groups inline, not just
-// count them — the whole point being that a quick check does not always
-// need the dedicated, drill-in views.
+// The details view should name a few hosts and groups inline, not just count
+// them — the whole point being that a quick check does not always need to
+// expand the full list.
 func TestInventoryDetailsPreviewsNames(t *testing.T) {
 	m, _ := openTab(t, "3")
 	m = rowAt(t, m, "production")
@@ -47,10 +48,9 @@ func TestInventoryDetailsPreviewsNames(t *testing.T) {
 	}
 }
 
-// Selecting groups in the members view and confirming with enter must offer
-// their names, ':'-joined, as the ad hoc form's limit default — the whole
-// point being that a user no longer has to already know a group's name to
-// type it blind.
+// Selecting groups inline and confirming with enter must offer their names,
+// ':'-joined, as the ad hoc form's limit default — the whole point being
+// that a user no longer has to already know a group's name to type it blind.
 func TestGroupSelectionPrefillsAdHocLimit(t *testing.T) {
 	srv := mockAWX(t)
 	m := New(awx.New(srv.URL, "test-token", false))
@@ -60,14 +60,14 @@ func TestGroupSelectionPrefillsAdHocLimit(t *testing.T) {
 	m = rowAt(t, m, "production")
 	m = step(t, m, key("enter"))
 	m = step(t, m, key("g"))
-	if m.mode != modeMembers {
-		t.Fatalf("expected the groups view, got mode %v (err %v)", m.mode, m.err)
+	if m.mode != modeInventory || m.inventory.focus != focusGroups {
+		t.Fatalf("expected groups expanded, got mode %v focus %v (err %v)", m.mode, m.inventory.focus, m.err)
 	}
 	m = step(t, m, key("a")) // select every loaded group
 	m = step(t, m, key("enter"))
 
-	if m.mode != modeInventory {
-		t.Fatalf("enter after selecting should return to the inventory details, got mode %v", m.mode)
+	if m.mode != modeInventory || m.inventory.focus != focusFields {
+		t.Fatalf("enter after selecting should collapse back to the details fields, got mode %v focus %v", m.mode, m.inventory.focus)
 	}
 	if m.limitSel.inventoryID != 3 || len(m.limitSel.names) != 2 {
 		t.Fatalf("limit selection = %+v, want both groups on inventory 3", m.limitSel)
@@ -87,7 +87,7 @@ func TestGroupSelectionPrefillsAdHocLimit(t *testing.T) {
 }
 
 // A template with its own non-empty default limit must keep it: a
-// members-view selection only fills a blank limit, never overrides one AWX
+// details-view selection only fills a blank limit, never overrides one AWX
 // already set for the template.
 func TestLimitSelectionNeverOverwritesTemplateDefault(t *testing.T) {
 	srv := mockAWX(t)

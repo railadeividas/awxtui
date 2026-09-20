@@ -50,65 +50,65 @@ func TestInventoryDetailsWithoutSources(t *testing.T) {
 	}
 }
 
-// "h" inside the details view is the only way left to reach an inventory's
-// hosts, now that enter opens details instead.
-func TestInventoryDetailsHKeyOpensHosts(t *testing.T) {
+// "h" inside the details view expands its hosts inline — no separate page,
+// no mode change, so there is nothing to navigate back out of but the
+// expansion itself.
+func TestInventoryDetailsHKeyExpandsHosts(t *testing.T) {
 	m, _ := openTab(t, "3")
 	m = rowAt(t, m, "production")
 	m = step(t, m, key("enter"))
 	m = step(t, m, key("h"))
 
-	if m.mode != modeMembers {
-		t.Fatalf("h in inventory details left mode %v, want modeMembers", m.mode)
+	if m.mode != modeInventory || m.inventory.focus != focusHosts {
+		t.Fatalf("h left mode %v focus %v, want modeInventory/focusHosts", m.mode, m.inventory.focus)
 	}
-	if m.members.invName != "production" || len(m.members.rows) == 0 {
-		t.Fatalf("h did not open production's hosts: title %q, rows %d", m.members.invName, len(m.members.rows))
-	}
-	if m.inventory.inventory.ID != 0 {
-		t.Errorf("h left inventory detail state behind: %+v", m.inventory)
+	if m.inventory.inventory.Name != "production" || len(m.inventory.hosts.rows) == 0 {
+		t.Fatalf("h did not expand production's hosts: inventory %q, rows %d",
+			m.inventory.inventory.Name, len(m.inventory.hosts.rows))
 	}
 }
 
-// While the hosts request is still on the wire, the view must show an empty,
-// spinning hosts table rather than lingering on a half-cleared details modal.
-func TestInventoryHKeyShowsHostsLoadingImmediately(t *testing.T) {
+// Hosts and groups are fetched as soon as the details open, not only once h/g
+// expands them, so both the inline preview and the expansion are ready
+// immediately — no spinner the user has to wait through after pressing h/g.
+func TestInventoryDetailsLoadsMembersUpFront(t *testing.T) {
 	m, _ := openTab(t, "3")
 	m = rowAt(t, m, "production")
-	m = step(t, m, key("enter"))
 
-	busy := probe(t, m, key("h"))
-	if busy.mode != modeMembers {
-		t.Fatalf("h left mode %v before the response landed, want modeMembers", busy.mode)
+	busy := probe(t, m, key("enter"))
+	if busy.mode != modeInventory {
+		t.Fatalf("enter left mode %v before the response landed, want modeInventory", busy.mode)
 	}
-	if len(busy.members.rows) != 0 || !busy.members.loading {
-		t.Fatalf("expected an empty, loading hosts view, got %d rows loading=%v", len(busy.members.rows), busy.members.loading)
-	}
-	view := stripANSI(busy.View())
-	if !strings.Contains(view, "fetching hosts") {
-		t.Errorf("hosts view does not show a loading spinner while fetching:\n%s", view)
+	if !busy.inventory.hosts.loading || !busy.inventory.groups.loading {
+		t.Fatalf("expected hosts and groups to start loading immediately, got hosts.loading=%v groups.loading=%v",
+			busy.inventory.hosts.loading, busy.inventory.groups.loading)
 	}
 
-	settled := step(t, m, key("h"))
-	if settled.members.loading || len(settled.members.rows) == 0 {
-		t.Errorf("hosts never settled: loading=%v rows=%d", settled.members.loading, len(settled.members.rows))
+	settled := step(t, m, key("enter"))
+	if settled.inventory.hosts.loading || len(settled.inventory.hosts.rows) == 0 {
+		t.Errorf("hosts never settled: loading=%v rows=%d", settled.inventory.hosts.loading, len(settled.inventory.hosts.rows))
+	}
+	view := stripANSI(settled.View())
+	if !strings.Contains(view, "web-01") {
+		t.Errorf("details view does not preview host names once loaded:\n%s", view)
 	}
 }
 
-// esc from the hosts view returns to the inventory's details, since that is
-// where hosts are reached from — not all the way out to the list.
-func TestHostsEscReturnsToInventoryDetails(t *testing.T) {
+// esc from an expanded hosts/groups list collapses back to the details
+// fields — it takes a second esc to leave the details view entirely.
+func TestMembersEscCollapsesBeforeLeavingDetails(t *testing.T) {
 	m, _ := openTab(t, "3")
 	m = rowAt(t, m, "production")
 	m = step(t, m, key("enter"))
 	m = step(t, m, key("h"))
-	if m.mode != modeMembers {
-		t.Fatalf("h left mode %v, want modeMembers", m.mode)
+	if m.inventory.focus != focusHosts {
+		t.Fatalf("h left focus %v, want focusHosts", m.inventory.focus)
 	}
 
 	m = step(t, m, key("esc"))
-	if m.mode != modeInventory || m.inventory.inventory.Name != "production" {
-		t.Fatalf("esc from hosts left mode %v inventory %+v, want details for production",
-			m.mode, m.inventory.inventory)
+	if m.mode != modeInventory || m.inventory.focus != focusFields {
+		t.Fatalf("esc from hosts left mode %v focus %v, want details fields for production",
+			m.mode, m.inventory.focus)
 	}
 
 	m = step(t, m, key("esc"))

@@ -128,6 +128,9 @@ func newPagedMock(t *testing.T, templates, jobs, hosts int) *pagedMock {
 	mux.HandleFunc("/api/v2/inventories/3/hosts/", func(w http.ResponseWriter, r *http.Request) {
 		p.paginate(w, r, hostList)
 	})
+	mux.HandleFunc("/api/v2/inventories/3/groups/", func(w http.ResponseWriter, r *http.Request) {
+		p.paginate(w, r, []any{})
+	})
 	mux.HandleFunc("/api/v2/projects/", func(w http.ResponseWriter, r *http.Request) {
 		p.paginate(w, r, []any{})
 	})
@@ -524,27 +527,33 @@ func TestPageCapStopsRunawayPagination(t *testing.T) {
 	}
 }
 
-// Drilling into a large inventory pages its hosts in as well.
+// Opening a large inventory's details pages its hosts in as well, and
+// expanding them (h) scrolls through what is already loaded plus whatever
+// scrolling further pages in.
 func TestHostsPageInOnDemand(t *testing.T) {
 	p := newPagedMock(t, 1, 1, 300)
 	m := pagedModel(t, p, 120, 30)
 	m = step(t, m, key("3"))
 	m = step(t, m, key("enter"))
-	m = step(t, m, key("h"))
 
-	if m.mode != modeMembers {
-		t.Fatalf("expected the members view, got %v (err %v)", m.mode, m.err)
+	if m.mode != modeInventory {
+		t.Fatalf("expected the inventory details, got %v (err %v)", m.mode, m.err)
 	}
-	if got := len(m.members.rows); got != 200 {
+	if got := len(m.inventory.hosts.rows); got != 200 {
 		t.Fatalf("first hosts page loaded %d rows, want 200", got)
 	}
-	if m.members.count != 300 {
-		t.Errorf("host count = %d, want 300", m.members.count)
+	if m.inventory.hosts.count != 300 {
+		t.Errorf("host count = %d, want 300", m.inventory.hosts.count)
+	}
+
+	m = step(t, m, key("h"))
+	if m.inventory.focus != focusHosts {
+		t.Fatalf("h left focus %v, want focusHosts", m.inventory.focus)
 	}
 	for i := 0; i < 200; i++ {
 		m = step(t, m, key("j"))
 	}
-	if got := len(m.members.rows); got != 300 {
+	if got := len(m.inventory.hosts.rows); got != 300 {
 		t.Errorf("after scrolling, %d host rows, want all 300", got)
 	}
 }
