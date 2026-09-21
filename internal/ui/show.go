@@ -111,11 +111,12 @@ var (
 	ownerChoice = choice{field: "mine", title: "Started by", kind: kindOwner, options: []option{
 		{"anyone", ""}, {"me", "yes"},
 	}}
-	// statusChoice offers no "any" option: an empty selection already means
-	// any, and a run is usually worth a look because it failed or is still
-	// running, which is two statuses at once, not one.
+	// statusChoice leads with "any", which clears every selected status. The
+	// empty set is what AWX uses for an unfiltered status query, but making it
+	// a visible choice gives the user a direct way to return to every run.
 	statusChoice = choice{field: "status", title: "Status", kind: kindMulti, options: []option{
-		{"running", "running"}, {"failed", "failed"}, {"successful", "successful"},
+		{"any", ""}, {"pending", "pending"}, {"running", "running"},
+		{"failed", "failed"}, {"successful", "successful"},
 	}}
 	// kindChoice leads with "any", a value of "" like any other row's blank
 	// option: selecting it does not add "" to the set, it clears whatever is

@@ -254,6 +254,33 @@ func TestShowFilterCanSelectMultipleStatuses(t *testing.T) {
 	}
 }
 
+func TestShowFilterOffersPendingAndAnyStatus(t *testing.T) {
+	srv := mockAWX(t)
+	m := onTab(t, srv, tabJobs)
+
+	// Pending is sent to AWX like every other status, even if this small mock
+	// does not happen to contain a pending run.
+	m = setShow(t, m, "status", "pending")
+	if got := m.show[tabJobs].status; len(got) != 1 || got[0] != "pending" {
+		t.Fatalf("pending status = %q, want pending", got)
+	}
+	if q := srv.unified(); !strings.Contains(q[len(q)-1], "status__in=pending") {
+		t.Errorf("the pending status filter did not reach AWX: %q", q[len(q)-1])
+	}
+
+	// The visible "any" choice clears the status set, so all runs are shown.
+	m = setShow(t, m, "status", "")
+	if got := m.show[tabJobs].status; len(got) != 0 {
+		t.Errorf("any status should clear the selection, got %q", got)
+	}
+	if got := len(rowIDs(m, tabJobs)); got != 6 {
+		t.Errorf("any status returned %d runs, want all 6", got)
+	}
+	if q := srv.unified(); strings.Contains(q[len(q)-1], "status__in=") {
+		t.Errorf("any status should omit status__in, got %q", q[len(q)-1])
+	}
+}
+
 // Kind is a set too, for the same reason status is: wanting jobs and project
 // updates together, but not inventory syncs, is one narrowing, not two.
 func TestShowFilterCanSelectMultipleKinds(t *testing.T) {
