@@ -30,6 +30,11 @@ import (
 	"github.com/railadeividas/awxtui/internal/ui"
 )
 
+// version is replaced in release builds with:
+//
+//	go build -ldflags "-X main.version=v1.2.3" -o awxtui .
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "awxtui: %v\n", err)
@@ -39,14 +44,19 @@ func main() {
 
 func run() error {
 	var (
-		configPath = flag.String("config", config.DefaultPath(), "path to the config file")
-		instance   = flag.String("instance", "", "name of the configured instance to use")
-		list       = flag.Bool("list", false, "list configured instances and exit")
-		readOnly   = flag.Bool("read-only", false, "refuse every request that would change AWX")
-		statePath  = flag.String("state", state.DefaultPath(), "path to the file of pinned records")
+		configPath  = flag.String("config", config.DefaultPath(), "path to the config file")
+		instance    = flag.String("instance", "", "name of the configured instance to use")
+		list        = flag.Bool("list", false, "list configured instances and exit")
+		showVersion = flag.Bool("version", false, "print the version and exit")
+		readOnly    = flag.Bool("read-only", false, "refuse every request that would change AWX")
+		statePath   = flag.String("state", state.DefaultPath(), "path to the file of pinned records")
 	)
 	flag.Usage = usage
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(versionString())
+		return nil
+	}
 
 	file, err := config.Load(*configPath)
 	if err != nil {
@@ -107,6 +117,7 @@ func run() error {
 
 	p := tea.NewProgram(
 		ui.New(client,
+			ui.WithVersion(version),
 			ui.WithInstances(instanceList(file, inst), inst.Name),
 			ui.WithConnector(connector),
 			ui.WithStore(store),
@@ -117,6 +128,8 @@ func run() error {
 	_, err = p.Run()
 	return err
 }
+
+func versionString() string { return "awxtui " + version }
 
 // instanceList is everything the switcher can offer: the configured
 // instances, plus the active one when it came from the environment.

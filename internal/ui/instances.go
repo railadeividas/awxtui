@@ -20,6 +20,15 @@ type InstanceInfo struct {
 // when a token_command does not work.
 type Connector func(name string) (*awx.Client, error)
 
+// WithVersion supplies the application version shown in the UI header.
+func WithVersion(version string) Option {
+	return func(m *Model) {
+		if version != "" {
+			m.version = version
+		}
+	}
+}
+
 // WithInstances supplies the instances that can be switched to and the one
 // currently connected.
 func WithInstances(list []InstanceInfo, current string) Option {
@@ -69,6 +78,7 @@ func (m *Model) switchInstance(name string) tea.Cmd {
 	// store holds both histories; building a fresh model without it would
 	// quietly demote pins to memory-only for the rest of the session.
 	fresh := New(client,
+		WithVersion(m.version),
 		WithInstances(m.instances, name),
 		WithConnector(m.connector),
 		WithStore(m.store),

@@ -74,8 +74,9 @@ var searchDelay = 400 * time.Millisecond
 
 // Model is the whole application state.
 type Model struct {
-	client *awx.Client
-	user   string
+	client  *awx.Client
+	version string
+	user    string
 	// userID is what a "mine" filter is built from: AWX takes the numeric id
 	// on created_by, and a rename would silently empty a filter on the name.
 	userID   int
@@ -198,6 +199,7 @@ func New(c *awx.Client, opts ...Option) Model {
 
 	m := Model{
 		client:      c,
+		version:     "dev",
 		mode:        modeList,
 		filterInput: fi,
 		spin:        sp,

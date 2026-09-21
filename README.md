@@ -8,9 +8,58 @@ Proof of concept: read-only browsing plus launch, cancel and sync.
 
 ## Install
 
+On Linux or macOS, install the latest release to `~/.local/bin`:
+
+```sh
+curl -fsSL https://github.com/railadeividas/awxtui/releases/latest/download/install.sh | sh
+```
+
+The installer verifies the release checksum before installing. To install a
+specific version or another directory, set `AWXTUI_VERSION` or
+`AWXTUI_INSTALL_DIR`:
+
+```sh
+curl -fsSL https://github.com/railadeividas/awxtui/releases/latest/download/install.sh | \
+  AWXTUI_VERSION=v0.1.0 AWXTUI_INSTALL_DIR=/usr/local/bin sh
+```
+
+Alternatively, download the archive for your operating system and CPU from the
+[GitHub Releases](https://github.com/railadeividas/awxtui/releases) page. Each
+release includes `checksums.txt` so you can verify the download before placing
+`awxtui` on your `PATH`.
+
+To build locally:
+
 ```sh
 go build -o awxtui .
 ```
+
+Local builds identify themselves as `dev`. Set a release version at build time
+with Go's linker flag:
+
+```sh
+go build -ldflags "-X main.version=v1.2.3" -o awxtui .
+```
+
+Check the installed binary with `awxtui --version` (or `awxtui -version`).
+
+## Release (maintainers)
+
+Pushing an annotated semantic-version tag creates a GitHub Release with
+Linux, macOS, and Windows archives for `amd64` and `arm64`, plus checksums.
+The binary version is injected from the tag automatically.
+
+```sh
+git switch main
+git pull --ff-only
+go test ./...
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+Use patch versions for fixes (`v0.1.1`) and minor versions for new features
+(`v0.2.0`). To test the release configuration without publishing, install
+GoReleaser and run `goreleaser release --snapshot --clean`.
 
 ## Configure
 

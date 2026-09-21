@@ -109,13 +109,15 @@ func (m Model) rule() string {
 }
 
 func (m Model) headerView() string {
+	// The header keeps its values close to their labels: a bare "prod" or
+	// username is too easy to misread when opening the app for the first time.
 	left := titleStyle.Render("awxtui")
 	if m.instance != "" {
 		chip := m.instance
 		if len(m.instances) > 1 {
 			chip += " ▾"
 		}
-		left += "  " + tabActiveStyle.Render(chip)
+		left += headerSeparator() + metaStyle.Render("instance") + " " + tabActiveStyle.Render(chip)
 	}
 	host := m.client.BaseURL()
 	host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
@@ -123,7 +125,7 @@ func (m Model) headerView() string {
 	if m.user != "" {
 		who = m.user + "@" + host
 	}
-	left += "  " + metaStyle.Render(who)
+	left += headerSeparator() + headerMeta("account", who)
 
 	if m.client.IsReadOnly() {
 		left += "  " + warnStyle.Render("read-only")
@@ -142,6 +144,15 @@ func (m Model) headerView() string {
 	}
 	return m.spread(left, right)
 }
+
+// headerMeta renders descriptive header information as a muted label followed
+// by its value. Keeping the label separate makes the value readable without
+// making it compete with the application title or the active-instance chip.
+func headerMeta(label, value string) string {
+	return metaStyle.Render(label) + " " + rowStyle.Render(value)
+}
+
+func headerSeparator() string { return metaStyle.Render("  ·  ") }
 
 // spread puts left and right on one line, padded to the terminal width.
 func (m Model) spread(left, right string) string {
@@ -554,6 +565,10 @@ func (m Model) errorModal() string {
 
 func (m Model) helpModal() string {
 	var b strings.Builder
+	b.WriteString(titleStyle.Render("About"))
+	b.WriteString("\n")
+	b.WriteString(headerMeta("awxtui version", m.version))
+	b.WriteString("\n\n")
 	b.WriteString(titleStyle.Render("Keys"))
 	b.WriteString("\n\n")
 	groups := [][2]string{
